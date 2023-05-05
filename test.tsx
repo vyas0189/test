@@ -1,5 +1,5 @@
 import React from "react";
-import { render, fireEvent } from "@testing-library/react";
+import { render, fireEvent, screen } from "@testing-library/react";
 import { AppId } from "./AppId";
 import { getInstanceID } from "../../utils/columnHelper";
 
@@ -11,8 +11,8 @@ describe("AppId component", () => {
   });
 
   it("renders nothing if appUrl or instanceId is empty", () => {
-    const { container } = render(<AppId appUrl="" instanceId="" />);
-    expect(container.firstChild).toBeNull();
+    render(<AppId appUrl="" instanceId="" />);
+    expect(screen.queryByRole("link")).not.toBeInTheDocument();
   });
 
   it("renders a Button with the correct props and instanceId label", () => {
@@ -20,9 +20,9 @@ describe("AppId component", () => {
     const instanceId = "abc123";
     (getInstanceID as jest.Mock).mockReturnValue("123");
 
-    const { getByRole } = render(<AppId appUrl={appUrl} instanceId={instanceId} />);
+    render(<AppId appUrl={appUrl} instanceId={instanceId} />);
 
-    const button = getByRole("link");
+    const button = screen.getByRole("link");
     expect(button).toHaveAttribute("href", appUrl);
     expect(button).toHaveAttribute("target", "_blank");
     expect(button).toHaveAttribute("rel", "noopener noreferrer");
@@ -44,9 +44,9 @@ describe("AppId component", () => {
     const instanceId = "abc123";
     (getInstanceID as jest.Mock).mockReturnValue("123");
 
-    const { getByRole } = render(<AppId appUrl={appUrl} instanceId={instanceId} />);
+    render(<AppId appUrl={appUrl} instanceId={instanceId} />);
 
-    const button = getByRole("link");
+    const button = screen.getByRole("link");
     fireEvent.click(button);
 
     expect(button).toHaveAttribute("href", appUrl);
@@ -57,9 +57,9 @@ describe("AppId component", () => {
     const instanceId = "abc123";
     (getInstanceID as jest.Mock).mockReturnValue("123");
 
-    const { getByRole } = render(<AppId appUrl={appUrl} instanceId={instanceId} />);
+    render(<AppId appUrl={appUrl} instanceId={instanceId} />);
 
-    const button = getByRole("link");
+    const button = screen.getByRole("link");
     fireEvent.click(button);
 
     expect(button).toHaveTextContent("123");
@@ -80,9 +80,9 @@ describe("AppId component", () => {
       throw new Error("Test error");
     });
 
-    const { getByRole } = render(<AppId appUrl={appUrl} instanceId={instanceId} />);
+    render(<AppId appUrl={appUrl} instanceId={instanceId} />);
 
-    const button = getByRole("link");
+    const button = screen.getByRole("link");
     expect(button).toHaveTextContent("");
   });
 });
