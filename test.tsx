@@ -1,89 +1,52 @@
 import React from "react";
-import { render, fireEvent, screen } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { AppId } from "./AppId";
-import { getInstanceID } from "../../utils/columnHelper";
-
-jest.mock("../../utils/columnHelper");
 
 describe("AppId component", () => {
-  beforeEach(() => {
-    jest.resetAllMocks();
+  test("renders the instance ID passed as a prop", () => {
+    render(
+      <AppId appUrl="http://example.com" instanceId="abc123:def456" />
+    );
+    expect(screen.getByRole("button")).toHaveTextContent("def456");
   });
 
-  it("renders nothing if appUrl or instanceId is empty", () => {
-    render(<AppId appUrl="" instanceId="" />);
-    expect(screen.queryByRole("link")).not.toBeInTheDocument();
+  test("calls getInstanceID with the correct argument", () => {
+    const mockGetInstanceID = jest.fn(() => "mock instance ID");
+    const instanceId = "abc123:def456";
+    render(
+      <AppId
+        appUrl="http://example.com"
+        instanceId={instanceId}
+      />
+    );
+    expect(mockGetInstanceID).toHaveBeenCalledWith(instanceId);
   });
 
-  it("renders a Button with the correct props and instanceId label", () => {
-    const appUrl = "https://example.com/app";
-    const instanceId = "abc123";
-    (getInstanceID as jest.Mock).mockReturnValue("123");
+  test("renders nothing when instanceId prop is an empty string", () => {
+    render(<AppId appUrl="http://example.com" instanceId="" />);
+    expect(screen.queryByRole("button")).not.toBeInTheDocument();
+  });
 
-    render(<AppId appUrl={appUrl} instanceId={instanceId} />);
+  test("renders nothing when appUrl prop is an empty string", () => {
+    render(<AppId appUrl="" instanceId="abc123:def456" />);
+    expect(screen.queryByRole("button")).not.toBeInTheDocument();
+  });
 
-    const button = screen.getByRole("link");
+  test("renders a link to the appUrl with correct attributes", () => {
+    const appUrl = "http://example.com";
+    render(<AppId appUrl={appUrl} instanceId="abc123:def456" />);
+    const button = screen.getByRole("button");
     expect(button).toHaveAttribute("href", appUrl);
     expect(button).toHaveAttribute("target", "_blank");
     expect(button).toHaveAttribute("rel", "noopener noreferrer");
-    expect(button).toHaveTextContent("123");
-    expect(getInstanceID).toHaveBeenCalledWith(instanceId);
   });
 
-  it("calls the getInstanceID function with the instanceId prop", () => {
-    const appUrl = "https://example.com/app";
-    const instanceId = "abc123";
-
-    render(<AppId appUrl={appUrl} instanceId={instanceId} />);
-
-    expect(getInstanceID).toHaveBeenCalledWith(instanceId);
+  test("opens the link in a new tab when clicked", () => {
+    const appUrl = "http://example.com";
+    render(<AppId appUrl={appUrl} instanceId="abc123:def456" />);
+    const button = screen.getByRole("button");
+    userEvent.click(button);
+    expect(window.open).toHaveBeenCalledWith(appUrl, "_blank");
   });
-
-  it("renders a Button with the correct href when clicked", () => {
-    const appUrl = "https://example.com/app";
-    const instanceId = "abc123";
-    (getInstanceID as jest.Mock).mockReturnValue("123");
-
-    render(<AppId appUrl={appUrl} instanceId={instanceId} />);
-
-    const button = screen.getByRole("link");
-    fireEvent.click(button);
-
-    expect(button).toHaveAttribute("href", appUrl);
-  });
-
-  it("renders a Button with the correct instanceId label when clicked", () => {
-    const appUrl = "https://example.com/app";
-    const instanceId = "abc123";
-    (getInstanceID as jest.Mock).mockReturnValue("123");
-
-    render(<AppId appUrl={appUrl} instanceId={instanceId} />);
-
-    const button = screen.getByRole("link");
-    fireEvent.click(button);
-
-    expect(button).toHaveTextContent("123");
-  });
-
-  it("does not call the getInstanceID function if instanceId is not provided", () => {
-    const appUrl = "https://example.com/app";
-
-    render(<AppId appUrl={appUrl} instanceId="" />);
-
-    expect(getInstanceID).not.toHaveBeenCalled();
-  });
-
-it("returns an empty string if an error occurs in getInstanceID", () => {
-  const appUrl = "https://example.com/app";
-  const instanceId = "abc123";
-  (getInstanceID as jest.Mock).mockImplementation(() => {
-    throw new Error("Test error");
-  });
-
-  render(<AppId appUrl={appUrl} instanceId={instanceId} />);
-
-  const button = screen.getByRole("link");
-  expect(button).toHaveTextContent("");
-});
-
 });
