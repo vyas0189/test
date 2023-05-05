@@ -73,16 +73,17 @@ describe("AppId component", () => {
     expect(getInstanceID).not.toHaveBeenCalled();
   });
 
-  it("returns an empty string if an error occurs in getInstanceID", () => {
-    const appUrl = "https://example.com/app";
-    const instanceId = "abc123";
-    (getInstanceID as jest.Mock).mockImplementation(() => {
-      throw new Error("Test error");
-    });
-
-    render(<AppId appUrl={appUrl} instanceId={instanceId} />);
-
-    const button = screen.getByRole("link");
-    expect(button).toHaveTextContent("");
+it("returns an empty string if an error occurs in getInstanceID", () => {
+  const appUrl = "https://example.com/app";
+  const instanceId = "abc123";
+  (getInstanceID as jest.Mock).mockImplementation(() => {
+    throw new Error("Test error");
   });
+
+  render(<AppId appUrl={appUrl} instanceId={instanceId} />);
+
+  const button = screen.getByRole("link");
+  expect(button).toHaveTextContent("");
+});
+
 });
