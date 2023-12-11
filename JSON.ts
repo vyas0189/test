@@ -1,4 +1,6 @@
-const data = {
+type JSONObject = Record<string, any>;
+
+const data: JSONObject = {
   "name": "Nested JSON Example",
   "details": {
     "age": 25,
@@ -10,26 +12,19 @@ const data = {
   "extraInfo": "{\"key\":\"value\",\"nested\":{\"innerKey\":42}}"
 };
 
-function updateJSON(obj) {
-  for (const key in obj) {
-    if (typeof obj[key] === 'string') {
-      try {
-        // Attempt to parse the string as JSON
-        const parsedValue = JSON.parse(obj[key]);
-
-        // If parsing is successful, update the value
-        obj[key] = parsedValue;
-      } catch (error) {
-        // Ignore parsing errors for non-JSON strings
+function updateJSON(obj: JSONObject): JSONObject {
+  return Object.fromEntries(
+    Object.entries(obj).map(([key, value]) => {
+      if (typeof value === 'string') {
+        try {
+          return [key, JSON.parse(value)];
+        } catch (error) {
+          // Ignore parsing errors for non-JSON strings
+        }
+      } else if (typeof value === 'object' && value !== null) {
+        return [key, updateJSON(value)];
       }
-    } else if (typeof obj[key] === 'object') {
-      // Recursively traverse nested objects
-      updateJSON(obj[key]);
-    }
-  }
+      return [key, value];
+    })
+  );
 }
-
-// Call the function to update the JSON
-updateJSON(data);
-
-console.log("Updated JSON:", data);
