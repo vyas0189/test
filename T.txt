@@ -1,1 +1,104 @@
 
+function JiraReviewWrapper() {
+	// ... existing state and hooks ...
+
+	// Change AgGridReact rowData to use rowData state
+	const gridRowData = Object.values(rowData);
+
+	// Memoize columnDefs
+	const columnDefs = useMemo(() => [
+		{
+			cellRenderer: 'agGroupCellRenderer',
+			sortable: false,
+			filter: false,
+			width: 50,
+		},
+		{
+			headerName: 'Jira ID',
+			field: 'key', // Ensure this matches the data structure (might be 'key' instead of 'JIRA_KEY')
+			sortable: true,
+			filter: true,
+			width: 100,
+		},
+		{
+			headerName: 'Summary',
+			field: 'summary',
+			sortable: true,
+			filter: true,
+			width: 200,
+		},
+		{
+			headerName: 'Status',
+			field: 'status',
+			sortable: true,
+			filter: true,
+			width: 100,
+			cellRenderer: StatusCellRender,
+			cellRendererParams: {
+				onStatusChange: handelStatusChange,
+				getDisabled: (data) => submittedRows.has(data.key),
+			},
+		},
+		{
+			headerName: 'Comment',
+			field: 'comment', // Ensure field matches the rowData structure
+			sortable: true,
+			filter: true,
+			width: 200,
+			cellRenderer: CommentsCellRender, // Fixed typo in component name
+			cellRendererParams: {
+				onCommentChange: handleCommentChange,
+				getDisabled: (data) => submittedRows.has(data.key),
+			},
+		},
+		{
+			headerName: 'Actions',
+			field: 'actions',
+			sortable: false,
+			filter: false,
+			width: 100,
+			cellRenderer: SubmitButtonCellRenderer,
+			cellRendererParams: {
+				onSubmit: handleSubmit,
+				getDisabled: (data) => submittedRows.has(data.key),
+			},
+		},
+	], [handelStatusChange, handleCommentChange, handleSubmit, submittedRows]);
+
+	// Update useEffect to include 'key' field if necessary
+	useEffect(() => {
+		const initialRowData = products.reduce((acc, product) => ({
+			...acc,
+			[product.key]: {
+				...product,
+				status: 'New',
+				comment: '',
+			},
+		}), {}); // Added initial value for reduce
+		setRowData(initialRowData);
+	}, [products]);
+
+	// ... rest of the component ...
+
+	return (
+		// ... existing JSX ...
+		<AgGridReact
+			rowData={gridRowData} // Use rowData state instead of products
+			columnDefs={columnDefs}
+			// ... other props ...
+		/>
+		// ... existing JSX ...
+	);
+}
+
+// Correct cell renderer (ensure consistent naming)
+const CommentsCellRender = ({ value, data, onCommentChange, disabled }) => {
+	return (
+		<textarea
+			className='w-full h-full p-2 border border-gray-300 rounded-md dark:bg-gray-800 dark:text-white'
+			value={value || ''}
+			onChange={(e) => onCommentChange(data.key, e.target.value)} // Use 'key' if that's the identifier
+			disabled={disabled}
+		/>
+	);
+};
