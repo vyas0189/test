@@ -1,104 +1,30 @@
+import json
+from flask import Flask, request, jsonify
 
-function JiraReviewWrapper() {
-	// ... existing state and hooks ...
+app = Flask(__name__)
 
-	// Change AgGridReact rowData to use rowData state
-	const gridRowData = Object.values(rowData);
+@app.route('/bitbucket-webhook', methods=['POST'])
+def bitbucket_webhook():
+    event_key = request.headers.get('X-Event-Key')
+    payload = request.get_json()
 
-	// Memoize columnDefs
-	const columnDefs = useMemo(() => [
-		{
-			cellRenderer: 'agGroupCellRenderer',
-			sortable: false,
-			filter: false,
-			width: 50,
-		},
-		{
-			headerName: 'Jira ID',
-			field: 'key', // Ensure this matches the data structure (might be 'key' instead of 'JIRA_KEY')
-			sortable: true,
-			filter: true,
-			width: 100,
-		},
-		{
-			headerName: 'Summary',
-			field: 'summary',
-			sortable: true,
-			filter: true,
-			width: 200,
-		},
-		{
-			headerName: 'Status',
-			field: 'status',
-			sortable: true,
-			filter: true,
-			width: 100,
-			cellRenderer: StatusCellRender,
-			cellRendererParams: {
-				onStatusChange: handelStatusChange,
-				getDisabled: (data) => submittedRows.has(data.key),
-			},
-		},
-		{
-			headerName: 'Comment',
-			field: 'comment', // Ensure field matches the rowData structure
-			sortable: true,
-			filter: true,
-			width: 200,
-			cellRenderer: CommentsCellRender, // Fixed typo in component name
-			cellRendererParams: {
-				onCommentChange: handleCommentChange,
-				getDisabled: (data) => submittedRows.has(data.key),
-			},
-		},
-		{
-			headerName: 'Actions',
-			field: 'actions',
-			sortable: false,
-			filter: false,
-			width: 100,
-			cellRenderer: SubmitButtonCellRenderer,
-			cellRendererParams: {
-				onSubmit: handleSubmit,
-				getDisabled: (data) => submittedRows.has(data.key),
-			},
-		},
-	], [handelStatusChange, handleCommentChange, handleSubmit, submittedRows]);
+    # Print the payload in JSON format with indentation for readability
+    print("Received payload:")
+    print(json.dumps(payload, indent=4))
 
-	// Update useEffect to include 'key' field if necessary
-	useEffect(() => {
-		const initialRowData = products.reduce((acc, product) => ({
-			...acc,
-			[product.key]: {
-				...product,
-				status: 'New',
-				comment: '',
-			},
-		}), {}); // Added initial value for reduce
-		setRowData(initialRowData);
-	}, [products]);
+    if event_key == "pullrequest:comment_created":
+        pr_id = payload.get("pullrequest", {}).get("id")
+        print(f"Comment added on PR: {pr_id}")
+    elif event_key == "pullrequest:approved":
+        pr_id = payload.get("pullrequest", {}).get("id")
+        print(f"PR Approved: {pr_id}")
+    elif event_key == "pullrequest:rejected":
+        pr_id = payload.get("pullrequest", {}).get("id")
+        print(f"PR Declined: {pr_id}")
+    else:
+        print(f"Unhandled event: {event_key}")
 
-	// ... rest of the component ...
+    return jsonify({"status": "ok"}), 200
 
-	return (
-		// ... existing JSX ...
-		<AgGridReact
-			rowData={gridRowData} // Use rowData state instead of products
-			columnDefs={columnDefs}
-			// ... other props ...
-		/>
-		// ... existing JSX ...
-	);
-}
-
-// Correct cell renderer (ensure consistent naming)
-const CommentsCellRender = ({ value, data, onCommentChange, disabled }) => {
-	return (
-		<textarea
-			className='w-full h-full p-2 border border-gray-300 rounded-md dark:bg-gray-800 dark:text-white'
-			value={value || ''}
-			onChange={(e) => onCommentChange(data.key, e.target.value)} // Use 'key' if that's the identifier
-			disabled={disabled}
-		/>
-	);
-};
+if __name__ == '__main__':
+    app.run(port=3000, debug=True)
