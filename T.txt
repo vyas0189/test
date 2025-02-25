@@ -1,12 +1,31 @@
 import json
 import logging
 from flask import Flask, request, jsonify
+from typing import Dict, Any, Callable
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
+
+def handle_comment_created(payload: Dict[str, Any]) -> None:
+    pr_id = payload.get("pullrequest", {}).get("id", "unknown")
+    logger.info("Comment added on PR: %s", pr_id)
+
+def handle_pr_approved(payload: Dict[str, Any]) -> None:
+    pr_id = payload.get("pullrequest", {}).get("id", "unknown")
+    logger.info("PR Approved: %s", pr_id)
+
+def handle_pr_rejected(payload: Dict[str, Any]) -> None:
+    pr_id = payload.get("pullrequest", {}).get("id", "unknown")
+    logger.info("PR Declined: %s", pr_id)
+
+event_handlers: Dict[str, Callable[[Dict[str, Any]], None]] = {
+    "pullrequest:comment_created": handle_comment_created,
+    "pullrequest:approved": handle_pr_approved,
+    "pullrequest:rejected": handle_pr_rejected,
+}
 
 @app.route('/bitbucket-webhook', methods=['POST'])
 def bitbucket_webhook():
@@ -23,16 +42,9 @@ def bitbucket_webhook():
         formatted_payload = json.dumps(payload, indent=4)
         logger.info("Received payload:\n%s", formatted_payload)
 
-        # Handle events based on the event key
-        if event_key == "pullrequest:comment_created":
-            pr_id = payload.get("pullrequest", {}).get("id", "unknown")
-            logger.info("Comment added on PR: %s", pr_id)
-        elif event_key == "pullrequest:approved":
-            pr_id = payload.get("pullrequest", {}).get("id", "unknown")
-            logger.info("PR Approved: %s", pr_id)
-        elif event_key == "pullrequest:rejected":
-            pr_id = payload.get("pullrequest", {}).get("id", "unknown")
-            logger.info("PR Declined: %s", pr_id)
+        handler = event_handlers.get(event_key)
+        if handler:
+            handler(payload)
         else:
             logger.warning("Unhandled event: %s", event_key)
 
