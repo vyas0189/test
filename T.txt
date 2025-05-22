@@ -1,36 +1,36 @@
 kind: ConfigMap
 metadata:
-  name: intake-app2-fb-agent-config
+  name: node-app-fb-agent-config
 data:
   fluent-bit.conf: |-
     # Multiline parser to group logs starting with a timestamp
     [MULTILINE_PARSER]
-        name          app2_multiline
+        name          node_app_multiline
         type          regex
         flush_timeout 1000
-        rule          "start_state" "/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3}/" "cont"
-        rule          "cont"        "/^(?!\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3})/" "cont"
+        rule          "start_state" "/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}:\d{3}/" "cont"
+        rule          "cont"        "/^(?!\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}:\d{3})/" "cont"
 
-    # Parser for structured log format (applied after multiline grouping)
+    # Parser to extract fields from grouped log entries
     [PARSER]
-        Name        app2_log_parser
+        Name        node_app_parser
         Format      regex
-        Regex       ^(?<timestamp>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3}), (?<level>\w+), (?<module>[\w.-]+), (?<function>\w+), (?<line>\d+): (?<message>.*)$
+        Regex       ^(?<timestamp>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}:\d{3}) (?<level>\w+): (?s)(?<message>.*)$
         Time_Key    timestamp
-        Time_Format %Y-%m-%d %H:%M:%S,%L
+        Time_Format %Y-%m-%d %H:%M:%S:%L
 
-    # Input for app2.log with multiline support
+    # Input to monitor rotating log files
     [INPUT]
         Name              tail
         Path              ${LOG_PATH}
-        Tag               intake-app2-log
-        Multiline.parser  app2_multiline
-        Parser            app2_log_parser
+        Tag               node_app_log
+        Multiline.parser  node_app_multiline
+        Parser            node_app_parser
         Mem_Buf_Limit     25MB
         Buffer_Max_Size   5MB
         Refresh_Interval  60
 
-    # Filter to add Kubernetes and app metadata
+    # Filter to add metadata (optional, adjust as needed)
     [FILTER]
         Name              record_modifier
         Match             *
@@ -40,7 +40,7 @@ data:
         Record            appId ${APP_ID}
         Record            appModule ${APP_MODULE}
 
-    # Output to forward logs to the specified host
+    # Output to forward logs to a destination
     [OUTPUT]
         Name              forward
         Match             *
