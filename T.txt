@@ -1,35 +1,22 @@
 kind: ConfigMap
 metadata:
-  name: intake-ui-fb-agent-config
+  name: intake-app2-fb-agent-config
 data:
   fluent-bit.conf: |-
-    # Parsers for NGINX log formats
+    # Parser for the Flask app log format
     [PARSER]
-        Name   nginx_access
-        Format regex
-        Regex  ^(?<remote_addr>\S+) - (?<remote_user>\S+) \[(?<time_local>[^\]]+)\] "(?<request>[^"]*)" (?<status>\d+) (?<body_bytes_sent>\d+) "(?<http_referer>[^"]*)" "(?<http_user_agent>[^"]*)"
+        Name        app2_log_parser
+        Format      regex
+        Regex       ^(?<timestamp>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3}), (?<level>\w+), (?<module>[\w.-]+), (?<function>\w+), (?<line>\d+): (?<message>.*)$
+        Time_Key    timestamp
+        Time_Format %Y-%m-%d %H:%M:%S,%L
 
-    [PARSER]
-        Name   nginx_error
-        Format regex
-        Regex  ^(?<time>\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2}) \[(?<level>\w+)\] (?<message>.*)$
-
-    # Input for access.log
+    # Input for app2.log
     [INPUT]
         Name              tail
-        Path              ${LOG_PATH_ACCESS}
-        Tag               nginx.access
-        Parser            nginx_access
-        Mem_Buf_Limit     25MB
-        Buffer_Max_Size   5MB
-        Refresh_Interval  60
-
-    # Input for error.log
-    [INPUT]
-        Name              tail
-        Path              ${LOG_PATH_ERROR}
-        Tag               nginx.error
-        Parser            nginx_error
+        Path              ${LOG_PATH}
+        Tag               intake-app2-log
+        Parser            app2_log_parser
         Mem_Buf_Limit     25MB
         Buffer_Max_Size   5MB
         Refresh_Interval  60
