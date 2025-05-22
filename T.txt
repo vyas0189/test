@@ -3,7 +3,15 @@ metadata:
   name: intake-app2-fb-agent-config
 data:
   fluent-bit.conf: |-
-    # Parser for the Flask app log format
+    # Multiline parser to group logs starting with a timestamp
+    [MULTILINE_PARSER]
+        name          app2_multiline
+        type          regex
+        flush_timeout 1000
+        rule          "start_state" "/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3}/" "cont"
+        rule          "cont"        "/^(?!\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3})/" "cont"
+
+    # Parser for structured log format (applied after multiline grouping)
     [PARSER]
         Name        app2_log_parser
         Format      regex
@@ -11,11 +19,12 @@ data:
         Time_Key    timestamp
         Time_Format %Y-%m-%d %H:%M:%S,%L
 
-    # Input for app2.log
+    # Input for app2.log with multiline support
     [INPUT]
         Name              tail
         Path              ${LOG_PATH}
         Tag               intake-app2-log
+        Multiline.parser  app2_multiline
         Parser            app2_log_parser
         Mem_Buf_Limit     25MB
         Buffer_Max_Size   5MB
