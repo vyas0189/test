@@ -1,4 +1,4 @@
-package com.example.recipes
+package com.jpmorgan.proactive.tfe
 
 import org.openrewrite.*
 import org.openrewrite.yaml.*
@@ -6,7 +6,7 @@ import org.openrewrite.yaml.tree.Yaml
 import org.openrewrite.internal.lang.Nullable
 import java.util.regex.Pattern
 
-class UpdateYamlWithTemplateHandling : Recipe() {
+class AwsDeploymentConfigRecipe : Recipe() {
     
     override fun getDisplayName(): String = "Update YAML zone_id with template handling"
     
@@ -27,116 +27,115 @@ class PreprocessYamlTemplates : Recipe() {
         "Wraps template expressions {{}} in quotes to make YAML parseable"
     
     override fun getVisitor(): TreeVisitor<*, ExecutionContext> = 
-        object : YamlSourceVisitor<ExecutionContext>() {
-            
-            private val templatePattern = Pattern.compile("(\\{\\{[^}]*\\}\\})")
-            
-            override fun visitSource(source: SourceFile, ctx: ExecutionContext): SourceFile {
-                if (source !is Yaml.Documents) {
-                    return source
-                }
-                
-                val originalContent = source.printAll()
-                val processedContent = wrapTemplatesInQuotes(originalContent)
-                
-                if (originalContent == processedContent) {
-                    return source
-                }
-                
-                // Reparse the YAML with wrapped templates
-                return YamlParser().parse(processedContent)
-                    .map { it.withSourcePath(source.sourcePath) }
-                    .first() as SourceFile
-            }
-            
-            private fun wrapTemplatesInQuotes(content: String): String {
-                val lines = content.split("\n")
-                val processedLines = lines.map { line ->
-                    if (containsUnquotedTemplate(line)) {
-                        wrapTemplateInLine(line)
-                    } else {
-                        line
-                    }
-                }
-                return processedLines.joinToString("\n")
-            }
-            
-            private fun containsUnquotedTemplate(line: String): Boolean {
-                val matcher = templatePattern.matcher(line)
-                while (matcher.find()) {
-                    val template = matcher.group(1)
-                    val beforeTemplate = line.substring(0, matcher.start())
-                    val afterTemplate = line.substring(matcher.end())
-                    
-                    // Check if template is already quoted
-                    val beforeTrimmed = beforeTemplate.trimEnd()
-                    val afterTrimmed = afterTemplate.trimStart()
-                    
-                    val isAlreadyQuoted = (beforeTrimmed.endsWith("\"") && afterTrimmed.startsWith("\"")) ||
-                                        (beforeTrimmed.endsWith("'") && afterTrimmed.startsWith("'"))
-                    
-                    if (!isAlreadyQuoted) {
-                        return true
-                    }
-                }
-                return false
-            }
-            
-            private fun wrapTemplateInLine(line: String): String {
-                val colonIndex = line.indexOf(':')
-                if (colonIndex == -1) return line
-                
-                val key = line.substring(0, colonIndex)
-                val value = line.substring(colonIndex + 1).trim()
-                
-                // Only wrap if the value contains templates and isn't already quoted
-                if (templatePattern.matcher(value).find() && !isAlreadyQuoted(value)) {
-                    return "$key: \"$value\""
-                }
-                
-                return line
-            }
-            
-            private fun isAlreadyQuoted(value: String): Boolean {
-                val trimmed = value.trim()
-                return (trimmed.startsWith("\"") && trimmed.endsWith("\"")) ||
-                       (trimmed.startsWith("'") && trimmed.endsWith("'"))
-            }
-        }
+        YamlTemplateVisitor()
 }
 
-// Alternative implementation using direct string manipulation before parsing
-class UpdateYamlZoneIdWithTemplates : ScanningRecipe<String>() {
+class YamlTemplateVisitor : YamlIsoVisitor<ExecutionContext>() {
+    
+    private val templatePattern = Pattern.compile("^(\\s*[^:]+):\\s*([^\"']*\\{\\{[^}]*\\}\\}[^\"']*)\\s*$")
+    
+    override fun visitDocuments(documents: Yaml.Documents, ctx: ExecutionContext): Yaml.Documents {
+        val originalContent = documents.printAll()
+        val processedContent = preprocessTemplates(originalContent)
+        
+        if (originalContent == processedContent) {
+            return documents
+        }
+        
+        // Reparse the YAML with wrapped templates
+        val parser = YamlParser()
+        val parsed = parser.parse(processedContent)
+        
+        if (parsed.isNotEmpty()) {
+            val newDocument = parsed[0] as Yaml.Documents
+            return newDocument.withSourcePath(documents.sourcePath)
+        }
+        
+        return documents
+    }
+    
+    private fun preprocessTemplates(content: String): String {
+        return content.lines().joinToString("\n") { line ->
+            if (shouldWrapLine(line)) {
+                wrapTemplateInLine(line)
+            } else {
+                line
+            }
+        }
+    }
+    
+    private fun shouldWrapLine(line: String): Boolean {
+        val matcher = templatePattern.matcher(line)
+        return matcher.matches() && !isAlreadyQuoted(matcher.group(2).trim())
+    }
+    
+    private fun wrapTemplateInLine(line: String): String {
+        val matcher = templatePattern.matcher(line)
+        if (matcher.matches()) {
+            val key = matcher.group(1)
+            val value = matcher.group(2).trim()
+            return "$key: \"$value\""
+        }
+        return line
+    }
+    
+    private fun isAlreadyQuoted(value: String): Boolean {
+        val trimmed = value.trim()
+        return (trimmed.startsWith("\"") && trimmed.endsWith("\"")) ||
+               (trimmed.startsWith("'") && trimmed.endsWith("'"))
+    }
+}
+
+// Alternative implementation using ScanningRecipe for more control
+class UpdateYamlZoneIdWithTemplates : ScanningRecipe<UpdateYamlZoneIdWithTemplates.Accumulator>() {
+    
+    data class Accumulator(val needsUpdate: Boolean = false)
     
     override fun getDisplayName(): String = "Update YAML zone_id handling templates"
     
     override fun getDescription(): String = 
         "Preprocesses YAML templates and updates zone_id to 'auto'"
     
-    override fun getInitialValue(ctx: ExecutionContext): String = ""
+    override fun getInitialValue(ctx: ExecutionContext): Accumulator = Accumulator()
     
-    override fun getScanner(acc: String): TreeVisitor<*, ExecutionContext> = 
+    override fun getScanner(acc: Accumulator): TreeVisitor<*, ExecutionContext> = 
         object : TreeVisitor<Tree, ExecutionContext>() {
             
-            override fun visit(@Nullable tree: Tree?, ctx: ExecutionContext): Tree? {
-                if (tree is SourceFile && tree.sourcePath.toString().endsWith(".yml") || 
-                    tree is SourceFile && tree.sourcePath.toString().endsWith(".yaml")) {
-                    
-                    val originalContent = tree.printAll()
-                    val processedContent = preprocessTemplates(originalContent)
-                    
-                    // Parse the preprocessed content
-                    val yamlParser = YamlParser()
-                    val parsedYaml = yamlParser.parse(processedContent).first()
-                    
-                    // Apply the zone_id update
-                    val updatedYaml = ChangePropertyValue("zone_id", "auto", null, null, null)
-                        .getVisitor()
-                        .visit(parsedYaml, ctx)
-                    
-                    return updatedYaml?.withSourcePath(tree.sourcePath)
+            override fun visit(tree: Tree?, ctx: ExecutionContext): Tree? {
+                if (tree is SourceFile && isYamlFile(tree)) {
+                    return processYamlFile(tree, ctx)
                 }
                 return tree
+            }
+            
+            private fun isYamlFile(sourceFile: SourceFile): Boolean {
+                val path = sourceFile.sourcePath.toString()
+                return path.endsWith(".yml") || path.endsWith(".yaml")
+            }
+            
+            private fun processYamlFile(sourceFile: SourceFile, ctx: ExecutionContext): SourceFile {
+                val originalContent = sourceFile.printAll()
+                val processedContent = preprocessTemplates(originalContent)
+                
+                // Parse the preprocessed content
+                val yamlParser = YamlParser()
+                val parseResults = yamlParser.parse(processedContent)
+                
+                if (parseResults.isEmpty()) {
+                    return sourceFile
+                }
+                
+                val parsedYaml = parseResults[0]
+                
+                // Apply the zone_id update
+                val changePropertyVisitor = ChangePropertyValue("zone_id", "auto", null, null, null).getVisitor()
+                val updatedYaml = changePropertyVisitor.visit(parsedYaml, ctx)
+                
+                return if (updatedYaml != null && updatedYaml is SourceFile) {
+                    updatedYaml.withSourcePath(sourceFile.sourcePath)
+                } else {
+                    sourceFile
+                }
             }
             
             private fun preprocessTemplates(content: String): String {
@@ -146,8 +145,18 @@ class UpdateYamlZoneIdWithTemplates : ScanningRecipe<String>() {
                 return templatePattern.matcher(content).replaceAll { matchResult ->
                     val key = matchResult.group(1)
                     val value = matchResult.group(2).trim()
-                    "$key: \"$value\""
+                    if (!isAlreadyQuoted(value)) {
+                        "$key: \"$value\""
+                    } else {
+                        matchResult.group(0)
+                    }
                 }
+            }
+            
+            private fun isAlreadyQuoted(value: String): Boolean {
+                val trimmed = value.trim()
+                return (trimmed.startsWith("\"") && trimmed.endsWith("\"")) ||
+                       (trimmed.startsWith("'") && trimmed.endsWith("'"))
             }
         }
 }
