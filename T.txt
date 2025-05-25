@@ -44,10 +44,14 @@ class YamlTemplateVisitor : YamlIsoVisitor<ExecutionContext>() {
         
         // Reparse the YAML with wrapped templates
         val parser = YamlParser()
-        val parsed = parser.parse(processedContent)
+        val parsed = parser.parseInputs(
+            listOf(Parser.Input.fromString(documents.sourcePath, processedContent)),
+            null,
+            ctx
+        )
         
-        if (parsed.isNotEmpty()) {
-            val newDocument = parsed[0] as Yaml.Documents
+        if (parsed.size > 0) {
+            val newDocument = parsed.iterator().next() as Yaml.Documents
             return newDocument.withSourcePath(documents.sourcePath)
         }
         
@@ -119,13 +123,17 @@ class UpdateYamlZoneIdWithTemplates : ScanningRecipe<UpdateYamlZoneIdWithTemplat
                 
                 // Parse the preprocessed content
                 val yamlParser = YamlParser()
-                val parseResults = yamlParser.parse(processedContent)
+                val parseResults = yamlParser.parseInputs(
+                    listOf(Parser.Input.fromString(sourceFile.sourcePath, processedContent)),
+                    null,
+                    ctx
+                )
                 
-                if (parseResults.isEmpty()) {
+                if (parseResults.size == 0) {
                     return sourceFile
                 }
                 
-                val parsedYaml = parseResults[0]
+                val parsedYaml = parseResults.iterator().next()
                 
                 // Apply the zone_id update
                 val changePropertyVisitor = ChangePropertyValue("zone_id", "auto", null, null, null).getVisitor()
