@@ -1,145 +1,114 @@
-package com.jpmorgan.proactive.tfe
+package com.example.recipes
 
-import org.openrewrite.*
-import org.openrewrite.yaml.*
-import org.openrewrite.yaml.tree.Yaml
-import java.util.regex.Pattern
+import org.openrewrite.ExecutionContext
+import org.openrewrite.Recipe
+import org.openrewrite.TreeVisitor
+import org.openrewrite.text.PlainText
+import org.openrewrite.text.PlainTextVisitor
 
-class AwsDeploymentConfigRecipe : Recipe() {
+class UpdateZoneIdToAuto : Recipe() {
     
-    override fun getDisplayName(): String = "Update YAML zone_id with template handling"
+    override fun getDisplayName(): String = "Update zone_id value to auto"
     
-    override fun getDescription(): String = 
-        "Wraps YAML template expressions {{}} in quotes and updates zone_id to 'auto'."
+    override fun getDescription(): String = "Updates the value of zone_id key to 'auto' in text files"
     
-    override fun getVisitor(): TreeVisitor<*, ExecutionContext> = 
-        object : TreeVisitor<Tree, ExecutionContext>() {
-            
-            override fun visit(tree: Tree?, ctx: ExecutionContext): Tree? {
-                if (tree is SourceFile && isYamlFile(tree)) {
-                    return processYamlFile(tree, ctx)
-                }
-                return super.visit(tree, ctx)
-            }
-            
-            private fun isYamlFile(sourceFile: SourceFile): Boolean {
-                val path = sourceFile.sourcePath.toString()
-                return path.endsWith(".yml") || path.endsWith(".yaml")
-            }
-            
-            private fun processYamlFile(sourceFile: SourceFile, ctx: ExecutionContext): SourceFile {
-                val originalContent = sourceFile.printAll()
-                var modifiedContent = wrapTemplates(originalContent)
-                modifiedContent = updateZoneIdValue(modifiedContent)
-                
-                if (originalContent != modifiedContent) {
-                    try {
-                        val parser = YamlParser()
-                        val parsed = parser.parse(ctx, modifiedContent)
-                        val parsedList = parsed.toList()
-                        if (parsedList.isNotEmpty() && parsedList[0] is Yaml.Documents) {
-                            return (parsedList[0] as Yaml.Documents).withSourcePath(sourceFile.sourcePath)
-                        }
-                    } catch (e: Exception) {
-                        // Fall back to original if parsing fails
-                    }
-                }
-                
-                return sourceFile
-            }
-            
-            private fun wrapTemplates(content: String): String {
-                val templatePattern = Pattern.compile("^(\\s*[^:]+):\\s*([^\"']*\\{\\{[^}]*\\}\\}[^\"']*)\\s*$", 
-                                                    Pattern.MULTILINE)
-                
-                return templatePattern.matcher(content).replaceAll { matchResult ->
-                    val key = matchResult.group(1)
-                    val value = matchResult.group(2).trim()
-                    
-                    if (!isQuoted(value)) {
-                        "$key: \"$value\""
-                    } else {
-                        matchResult.group(0)
-                    }
+    override fun getVisitor(): TreeVisitor<*, ExecutionContext> {
+        return ZoneIdUpdaterVisitor()
+    }
+}
+
+class ZoneIdUpdaterVisitor : PlainTextVisitor<ExecutionContext>() {
+    
+    override fun visitText(text: PlainText, ctx: ExecutionContext): PlainText {
+        val content = text.text
+        
+        // Pattern to match zone_id with various formats
+        val patterns = listOf(
+            // JSON-like format: "zone_id": "value"
+            Regex("""("zone_id"\s*:\s*)"[^"]*""""),
+            // YAML-like format: zone_id: value
+            Regex("""(zone_id\s*:\s*)[^\s\n]+"""),
+            // Properties format: zone_id=value
+            Regex("""(zone_id\s*=\s*)[^\s\n]+"""),
+            // XML-like attribute: zone_id="value"
+            Regex("""(zone_id\s*=\s*)"[^"]*""""),
+            // TOML format: zone_id = "value"
+            Regex("""(zone_id\s*=\s*)"[^"]*"""")
+        )
+        
+        var updatedContent = content
+        var wasUpdated = false
+        
+        // Try each pattern and update if found
+        for (pattern in patterns) {
+            val newContent = pattern.replace(updatedContent) { matchResult ->
+                wasUpdated = true
+                val prefix = matchResult.groupValues[1]
+                when {
+                    // JSON format
+                    prefix.contains(":") && prefix.contains("\"") -> "${prefix}\"auto\""
+                    // YAML format (no quotes needed typically)
+                    prefix.contains(":") -> "${prefix}auto"
+                    // Properties format
+                    prefix.contains("=") && !prefix.contains("\"") -> "${prefix}auto"
+                    // XML/TOML format with quotes
+                    prefix.contains("=") && prefix.contains("\"") -> "${prefix}\"auto\""
+                    else -> "${prefix}auto"
                 }
             }
             
-            private fun updateZoneIdValue(content: String): String {
-                val zoneIdPattern = Pattern.compile("^(\\s*zone_id\\s*):\\s*(.*)$", Pattern.MULTILINE)
-                return zoneIdPattern.matcher(content).replaceAll("$1: auto")
-            }
-            
-            private fun isQuoted(value: String): Boolean {
-                val trimmed = value.trim()
-                return (trimmed.startsWith("\"") && trimmed.endsWith("\"")) ||
-                       (trimmed.startsWith("'") && trimmed.endsWith("'"))
+            if (newContent != updatedContent) {
+                updatedContent = newContent
+                break // Found and updated, no need to try other patterns
             }
         }
-
-// Alternative simpler approach using string manipulation only
-class SimpleYamlTemplateRecipe : Recipe() {
-    
-    override fun getDisplayName(): String = "Simple YAML template and zone_id update"
-    
-    override fun getDescription(): String = 
-        "Wraps YAML templates in quotes and updates zone_id using string manipulation."
-    
-    override fun getVisitor(): TreeVisitor<*, ExecutionContext> = 
-        object : TreeVisitor<Tree, ExecutionContext>() {
-            
-            override fun visit(tree: Tree?, ctx: ExecutionContext): Tree? {
-                if (tree is Yaml.Documents) {
-                    return processYamlDocument(tree, ctx)
-                }
-                return super.visit(tree, ctx)
-            }
-            
-            private fun processYamlDocument(documents: Yaml.Documents, ctx: ExecutionContext): Yaml.Documents {
-                val originalContent = documents.printAll()
-                var modifiedContent = wrapTemplates(originalContent)
-                modifiedContent = updateZoneIdValue(modifiedContent)
-                
-                if (originalContent != modifiedContent) {
-                    try {
-                        val parser = YamlParser()
-                        val parsed = parser.parse(ctx, modifiedContent)
-                        val parsedList = parsed.toList()
-                        if (parsedList.isNotEmpty() && parsedList[0] is Yaml.Documents) {
-                            return (parsedList[0] as Yaml.Documents).withSourcePath(documents.sourcePath)
-                        }
-                    } catch (e: Exception) {
-                        // Fall back to original if parsing fails
-                    }
-                }
-                
-                return documents
-            }
-            
-            private fun wrapTemplates(content: String): String {
-                val templatePattern = Pattern.compile("^(\\s*[^:]+):\\s*([^\"']*\\{\\{[^}]*\\}\\}[^\"']*)\\s*$", 
-                                                    Pattern.MULTILINE)
-                
-                return templatePattern.matcher(content).replaceAll { matchResult ->
-                    val key = matchResult.group(1)
-                    val value = matchResult.group(2).trim()
-                    
-                    if (!isQuoted(value)) {
-                        "$key: \"$value\""
-                    } else {
-                        matchResult.group(0)
-                    }
-                }
-            }
-            
-            private fun updateZoneIdValue(content: String): String {
-                val zoneIdPattern = Pattern.compile("^(\\s*zone_id\\s*):\\s*(.*)$", Pattern.MULTILINE)
-                return zoneIdPattern.matcher(content).replaceAll("$1: auto")
-            }
-            
-            private fun isQuoted(value: String): Boolean {
-                val trimmed = value.trim()
-                return (trimmed.startsWith("\"") && trimmed.endsWith("\"")) ||
-                       (trimmed.startsWith("'") && trimmed.endsWith("'"))
-            }
+        
+        return if (wasUpdated) {
+            text.withText(updatedContent)
+        } else {
+            text
         }
+    }
+}
+
+// Alternative more specific visitor if you know the exact format
+class JsonZoneIdUpdaterVisitor : PlainTextVisitor<ExecutionContext>() {
+    
+    override fun visitText(text: PlainText, ctx: ExecutionContext): PlainText {
+        val content = text.text
+        
+        // Specifically for JSON format: "zone_id": "any_value"
+        val jsonPattern = Regex("""("zone_id"\s*:\s*)"[^"]*"""")
+        
+        val updatedContent = jsonPattern.replace(content) { matchResult ->
+            """${matchResult.groupValues[1]}"auto""""
+        }
+        
+        return if (updatedContent != content) {
+            text.withText(updatedContent)
+        } else {
+            text
+        }
+    }
+}
+
+// Alternative for YAML format specifically
+class YamlZoneIdUpdaterVisitor : PlainTextVisitor<ExecutionContext>() {
+    
+    override fun visitText(text: PlainText, ctx: ExecutionContext): PlainText {
+        val content = text.text
+        
+        // Specifically for YAML format: zone_id: any_value
+        val yamlPattern = Regex("""(zone_id\s*:\s*)[^\s\n]+""")
+        
+        val updatedContent = yamlPattern.replace(content) { matchResult ->
+            "${matchResult.groupValues[1]}auto"
+        }
+        
+        return if (updatedContent != content) {
+            text.withText(updatedContent)
+        } else {
+            text
+        }
+    }
 }
