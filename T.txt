@@ -28,10 +28,11 @@ class YamlTemplateAndUpdateVisitor : YamlIsoVisitor<ExecutionContext>() {
             // Content was modified, need to reparse
             try {
                 val parser = YamlParser()
-                val newSourceFile = parser.parse(processedContent, documents.sourcePath, null)
-                if (newSourceFile.isNotEmpty() && newSourceFile[0] is Yaml.Documents) {
-                    val reparsedDoc = newSourceFile[0] as Yaml.Documents
-                    return updateZoneId(reparsedDoc, ctx)
+                val newSourceFile = parser.parse(ctx, processedContent)
+                val sourceFileList = newSourceFile.toList()
+                if (sourceFileList.isNotEmpty() && sourceFileList[0] is Yaml.Documents) {
+                    val reparsedDoc = sourceFileList[0] as Yaml.Documents
+                    return updateZoneId(reparsedDoc.withSourcePath(documents.sourcePath), ctx)
                 }
             } catch (e: Exception) {
                 // If reparsing fails, continue with original document
@@ -106,9 +107,10 @@ class SimpleYamlTemplateRecipe : Recipe() {
                 if (originalContent != modifiedContent) {
                     try {
                         val parser = YamlParser()
-                        val parsed = parser.parse(modifiedContent, documents.sourcePath, null)
-                        if (parsed.isNotEmpty() && parsed[0] is Yaml.Documents) {
-                            return parsed[0] as Yaml.Documents
+                        val parsed = parser.parse(ctx, modifiedContent)
+                        val parsedList = parsed.toList()
+                        if (parsedList.isNotEmpty() && parsedList[0] is Yaml.Documents) {
+                            return (parsedList[0] as Yaml.Documents).withSourcePath(documents.sourcePath)
                         }
                     } catch (e: Exception) {
                         // Fall back to original if parsing fails
