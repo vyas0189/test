@@ -1,51 +1,153 @@
-kind: ConfigMap
-metadata:
-  name: node-app-fb-agent-config
-data:
-  fluent-bit.conf: |-
-    # Multiline parser to group logs starting with a timestamp
-    [MULTILINE_PARSER]
-        name          node_app_multiline
-        type          regex
-        flush_timeout 1000
-        rule          "start_state" "/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}:\d{3}/" "cont"
-        rule          "cont"        "/^(?!\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}:\d{3})/" "cont"
+package com.example.recipes
 
-    # Parser to extract fields from grouped log entries
-    [PARSER]
-        Name        node_app_parser
-        Format      regex
-        Regex       ^(?<timestamp>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}:\d{3}) (?<level>\w+): (?s)(?<message>.*)$
-        Time_Key    timestamp
-        Time_Format %Y-%m-%d %H:%M:%S:%L
+import org.openrewrite.*
+import org.openrewrite.yaml.*
+import org.openrewrite.yaml.tree.Yaml
+import org.openrewrite.internal.lang.Nullable
+import java.util.regex.Pattern
 
-    # Input to monitor rotating log files
-    [INPUT]
-        Name              tail
-        Path              ${LOG_PATH}
-        Tag               node_app_log
-        Multiline.parser  node_app_multiline
-        Parser            node_app_parser
-        Mem_Buf_Limit     25MB
-        Buffer_Max_Size   5MB
-        Refresh_Interval  60
+class UpdateYamlWithTemplateHandling : Recipe() {
+    
+    override fun getDisplayName(): String = "Update YAML zone_id with template handling"
+    
+    override fun getDescription(): String = 
+        "Wraps YAML template expressions {{}} in quotes and updates zone_id to 'auto'"
+    
+    override fun getRecipeList(): List<Recipe> = listOf(
+        PreprocessYamlTemplates(),
+        ChangePropertyValue("zone_id", "auto", null, null, null)
+    )
+}
 
-    # Filter to add metadata (optional, adjust as needed)
-    [FILTER]
-        Name              record_modifier
-        Match             *
-        Record            Kubernetes.node ${K8S_NODE_NAME}
-        Record            Kubernetes.pod ${K8S_POD_NAME}
-        Record            Kubernetes.namespace ${K8S_NAMESPACE}
-        Record            appId ${APP_ID}
-        Record            appModule ${APP_MODULE}
+class PreprocessYamlTemplates : Recipe() {
+    
+    override fun getDisplayName(): String = "Preprocess YAML templates"
+    
+    override fun getDescription(): String = 
+        "Wraps template expressions {{}} in quotes to make YAML parseable"
+    
+    override fun getVisitor(): TreeVisitor<*, ExecutionContext> = 
+        object : YamlSourceVisitor<ExecutionContext>() {
+            
+            private val templatePattern = Pattern.compile("(\\{\\{[^}]*\\}\\})")
+            
+            override fun visitSource(source: SourceFile, ctx: ExecutionContext): SourceFile {
+                if (source !is Yaml.Documents) {
+                    return source
+                }
+                
+                val originalContent = source.printAll()
+                val processedContent = wrapTemplatesInQuotes(originalContent)
+                
+                if (originalContent == processedContent) {
+                    return source
+                }
+                
+                // Reparse the YAML with wrapped templates
+                return YamlParser().parse(processedContent)
+                    .map { it.withSourcePath(source.sourcePath) }
+                    .first() as SourceFile
+            }
+            
+            private fun wrapTemplatesInQuotes(content: String): String {
+                val lines = content.split("\n")
+                val processedLines = lines.map { line ->
+                    if (containsUnquotedTemplate(line)) {
+                        wrapTemplateInLine(line)
+                    } else {
+                        line
+                    }
+                }
+                return processedLines.joinToString("\n")
+            }
+            
+            private fun containsUnquotedTemplate(line: String): Boolean {
+                val matcher = templatePattern.matcher(line)
+                while (matcher.find()) {
+                    val template = matcher.group(1)
+                    val beforeTemplate = line.substring(0, matcher.start())
+                    val afterTemplate = line.substring(matcher.end())
+                    
+                    // Check if template is already quoted
+                    val beforeTrimmed = beforeTemplate.trimEnd()
+                    val afterTrimmed = afterTemplate.trimStart()
+                    
+                    val isAlreadyQuoted = (beforeTrimmed.endsWith("\"") && afterTrimmed.startsWith("\"")) ||
+                                        (beforeTrimmed.endsWith("'") && afterTrimmed.startsWith("'"))
+                    
+                    if (!isAlreadyQuoted) {
+                        return true
+                    }
+                }
+                return false
+            }
+            
+            private fun wrapTemplateInLine(line: String): String {
+                val colonIndex = line.indexOf(':')
+                if (colonIndex == -1) return line
+                
+                val key = line.substring(0, colonIndex)
+                val value = line.substring(colonIndex + 1).trim()
+                
+                // Only wrap if the value contains templates and isn't already quoted
+                if (templatePattern.matcher(value).find() && !isAlreadyQuoted(value)) {
+                    return "$key: \"$value\""
+                }
+                
+                return line
+            }
+            
+            private fun isAlreadyQuoted(value: String): Boolean {
+                val trimmed = value.trim()
+                return (trimmed.startsWith("\"") && trimmed.endsWith("\"")) ||
+                       (trimmed.startsWith("'") && trimmed.endsWith("'"))
+            }
+        }
+}
 
-    # Output to forward logs to a destination
-    [OUTPUT]
-        Name              forward
-        Match             *
-        Host              ${PPA_HOST}
-        Port              ${PPA_PORT}
-        tls               on
-        tls.verify        off
-        Empty_Shared_Key  True
+// Alternative implementation using direct string manipulation before parsing
+class UpdateYamlZoneIdWithTemplates : ScanningRecipe<String>() {
+    
+    override fun getDisplayName(): String = "Update YAML zone_id handling templates"
+    
+    override fun getDescription(): String = 
+        "Preprocesses YAML templates and updates zone_id to 'auto'"
+    
+    override fun getInitialValue(ctx: ExecutionContext): String = ""
+    
+    override fun getScanner(acc: String): TreeVisitor<*, ExecutionContext> = 
+        object : TreeVisitor<Tree, ExecutionContext>() {
+            
+            override fun visit(@Nullable tree: Tree?, ctx: ExecutionContext): Tree? {
+                if (tree is SourceFile && tree.sourcePath.toString().endsWith(".yml") || 
+                    tree is SourceFile && tree.sourcePath.toString().endsWith(".yaml")) {
+                    
+                    val originalContent = tree.printAll()
+                    val processedContent = preprocessTemplates(originalContent)
+                    
+                    // Parse the preprocessed content
+                    val yamlParser = YamlParser()
+                    val parsedYaml = yamlParser.parse(processedContent).first()
+                    
+                    // Apply the zone_id update
+                    val updatedYaml = ChangePropertyValue("zone_id", "auto", null, null, null)
+                        .getVisitor()
+                        .visit(parsedYaml, ctx)
+                    
+                    return updatedYaml?.withSourcePath(tree.sourcePath)
+                }
+                return tree
+            }
+            
+            private fun preprocessTemplates(content: String): String {
+                val templatePattern = Pattern.compile("^(\\s*[^:]+):\\s*([^\"']*\\{\\{[^}]*\\}\\}[^\"']*)\\s*$", 
+                                                    Pattern.MULTILINE)
+                
+                return templatePattern.matcher(content).replaceAll { matchResult ->
+                    val key = matchResult.group(1)
+                    val value = matchResult.group(2).trim()
+                    "$key: \"$value\""
+                }
+            }
+        }
+}
