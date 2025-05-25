@@ -10,76 +10,71 @@ class AwsDeploymentConfigRecipe : Recipe() {
     override fun getDisplayName(): String = "Update YAML zone_id with template handling"
     
     override fun getDescription(): String = 
-        "Wraps YAML template expressions {{}} in quotes and updates zone_id to 'auto'"
+        "Wraps YAML template expressions {{}} in quotes and updates zone_id to 'auto'."
     
     override fun getVisitor(): TreeVisitor<*, ExecutionContext> = 
-        YamlTemplateAndUpdateVisitor()
-}
-
-class YamlTemplateAndUpdateVisitor : YamlIsoVisitor<ExecutionContext>() {
-    
-    private val templatePattern = Pattern.compile("^(\\s*[^:]+):\\s*([^\"']*\\{\\{[^}]*\\}\\}[^\"']*)\\s*$")
-    
-    override fun visitDocuments(documents: Yaml.Documents, ctx: ExecutionContext): Yaml.Documents {
-        val originalContent = documents.printAll()
-        val processedContent = preprocessTemplates(originalContent)
-        
-        if (originalContent != processedContent) {
-            // Content was modified, need to reparse
-            try {
-                val parser = YamlParser()
-                val newSourceFile = parser.parse(ctx, processedContent)
-                val sourceFileList = newSourceFile.toList()
-                if (sourceFileList.isNotEmpty() && sourceFileList[0] is Yaml.Documents) {
-                    val reparsedDoc = sourceFileList[0] as Yaml.Documents
-                    return updateZoneId(reparsedDoc.withSourcePath(documents.sourcePath), ctx)
+        object : TreeVisitor<Tree, ExecutionContext>() {
+            
+            override fun visit(tree: Tree?, ctx: ExecutionContext): Tree? {
+                if (tree is SourceFile && isYamlFile(tree)) {
+                    return processYamlFile(tree, ctx)
                 }
-            } catch (e: Exception) {
-                // If reparsing fails, continue with original document
+                return super.visit(tree, ctx)
+            }
+            
+            private fun isYamlFile(sourceFile: SourceFile): Boolean {
+                val path = sourceFile.sourcePath.toString()
+                return path.endsWith(".yml") || path.endsWith(".yaml")
+            }
+            
+            private fun processYamlFile(sourceFile: SourceFile, ctx: ExecutionContext): SourceFile {
+                val originalContent = sourceFile.printAll()
+                var modifiedContent = wrapTemplates(originalContent)
+                modifiedContent = updateZoneIdValue(modifiedContent)
+                
+                if (originalContent != modifiedContent) {
+                    try {
+                        val parser = YamlParser()
+                        val parsed = parser.parse(ctx, modifiedContent)
+                        val parsedList = parsed.toList()
+                        if (parsedList.isNotEmpty() && parsedList[0] is Yaml.Documents) {
+                            return (parsedList[0] as Yaml.Documents).withSourcePath(sourceFile.sourcePath)
+                        }
+                    } catch (e: Exception) {
+                        // Fall back to original if parsing fails
+                    }
+                }
+                
+                return sourceFile
+            }
+            
+            private fun wrapTemplates(content: String): String {
+                val templatePattern = Pattern.compile("^(\\s*[^:]+):\\s*([^\"']*\\{\\{[^}]*\\}\\}[^\"']*)\\s*$", 
+                                                    Pattern.MULTILINE)
+                
+                return templatePattern.matcher(content).replaceAll { matchResult ->
+                    val key = matchResult.group(1)
+                    val value = matchResult.group(2).trim()
+                    
+                    if (!isQuoted(value)) {
+                        "$key: \"$value\""
+                    } else {
+                        matchResult.group(0)
+                    }
+                }
+            }
+            
+            private fun updateZoneIdValue(content: String): String {
+                val zoneIdPattern = Pattern.compile("^(\\s*zone_id\\s*):\\s*(.*)$", Pattern.MULTILINE)
+                return zoneIdPattern.matcher(content).replaceAll("$1: auto")
+            }
+            
+            private fun isQuoted(value: String): Boolean {
+                val trimmed = value.trim()
+                return (trimmed.startsWith("\"") && trimmed.endsWith("\"")) ||
+                       (trimmed.startsWith("'") && trimmed.endsWith("'"))
             }
         }
-        
-        // Apply zone_id update to original document
-        return updateZoneId(documents, ctx)
-    }
-    
-    private fun updateZoneId(documents: Yaml.Documents, ctx: ExecutionContext): Yaml.Documents {
-        val changeVisitor = ChangePropertyValue("zone_id", "auto", null, null, null).getVisitor()
-        val result = changeVisitor.visit(documents, ctx)
-        return if (result is Yaml.Documents) result else documents
-    }
-    
-    private fun preprocessTemplates(content: String): String {
-        return content.lines().joinToString("\n") { line ->
-            if (shouldWrapLine(line)) {
-                wrapTemplateInLine(line)
-            } else {
-                line
-            }
-        }
-    }
-    
-    private fun shouldWrapLine(line: String): Boolean {
-        val matcher = templatePattern.matcher(line)
-        return matcher.matches() && !isAlreadyQuoted(matcher.group(2).trim())
-    }
-    
-    private fun wrapTemplateInLine(line: String): String {
-        val matcher = templatePattern.matcher(line)
-        if (matcher.matches()) {
-            val key = matcher.group(1)
-            val value = matcher.group(2).trim()
-            return "$key: \"$value\""
-        }
-        return line
-    }
-    
-    private fun isAlreadyQuoted(value: String): Boolean {
-        val trimmed = value.trim()
-        return (trimmed.startsWith("\"") && trimmed.endsWith("\"")) ||
-               (trimmed.startsWith("'") && trimmed.endsWith("'"))
-    }
-}
 
 // Alternative simpler approach using string manipulation only
 class SimpleYamlTemplateRecipe : Recipe() {
@@ -87,7 +82,7 @@ class SimpleYamlTemplateRecipe : Recipe() {
     override fun getDisplayName(): String = "Simple YAML template and zone_id update"
     
     override fun getDescription(): String = 
-        "Wraps YAML templates in quotes and updates zone_id using string manipulation"
+        "Wraps YAML templates in quotes and updates zone_id using string manipulation."
     
     override fun getVisitor(): TreeVisitor<*, ExecutionContext> = 
         object : TreeVisitor<Tree, ExecutionContext>() {
