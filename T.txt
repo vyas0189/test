@@ -3,7 +3,6 @@ package com.jpmorgan.proactive.tfe
 import org.openrewrite.*
 import org.openrewrite.yaml.*
 import org.openrewrite.yaml.tree.Yaml
-import org.openrewrite.internal.lang.Nullable
 import java.util.regex.Pattern
 
 class AwsDeploymentConfigRecipe : Recipe() {
@@ -13,24 +12,11 @@ class AwsDeploymentConfigRecipe : Recipe() {
     override fun getDescription(): String = 
         "Wraps YAML template expressions {{}} in quotes and updates zone_id to 'auto'"
     
-    override fun getRecipeList(): List<Recipe> = listOf(
-        PreprocessYamlTemplates(),
-        ChangePropertyValue("zone_id", "auto", null, null, null)
-    )
-}
-
-class PreprocessYamlTemplates : Recipe() {
-    
-    override fun getDisplayName(): String = "Preprocess YAML templates"
-    
-    override fun getDescription(): String = 
-        "Wraps template expressions {{}} in quotes to make YAML parseable"
-    
     override fun getVisitor(): TreeVisitor<*, ExecutionContext> = 
-        YamlTemplateVisitor()
+        YamlTemplateAndUpdateVisitor()
 }
 
-class YamlTemplateVisitor : YamlIsoVisitor<ExecutionContext>() {
+class YamlTemplateAndUpdateVisitor : YamlIsoVisitor<ExecutionContext>() {
     
     private val templatePattern = Pattern.compile("^(\\s*[^:]+):\\s*([^\"']*\\{\\{[^}]*\\}\\}[^\"']*)\\s*$")
     
@@ -38,25 +24,28 @@ class YamlTemplateVisitor : YamlIsoVisitor<ExecutionContext>() {
         val originalContent = documents.printAll()
         val processedContent = preprocessTemplates(originalContent)
         
-        if (originalContent == processedContent) {
-            return documents
+        if (originalContent != processedContent) {
+            // Content was modified, need to reparse
+            try {
+                val parser = YamlParser()
+                val newSourceFile = parser.parse(processedContent, documents.sourcePath, null)
+                if (newSourceFile.isNotEmpty() && newSourceFile[0] is Yaml.Documents) {
+                    val reparsedDoc = newSourceFile[0] as Yaml.Documents
+                    return updateZoneId(reparsedDoc, ctx)
+                }
+            } catch (e: Exception) {
+                // If reparsing fails, continue with original document
+            }
         }
         
-        // Reparse the YAML with wrapped templates
-        val parser = YamlParser()
-        val parsed = parser.parseInputs(
-            listOf(Parser.Input.fromString(documents.sourcePath, processedContent)),
-            null,
-            ctx
-        )
-        
-        val iterator = parsed.iterator()
-        if (iterator.hasNext()) {
-            val newDocument = iterator.next() as Yaml.Documents
-            return newDocument.withSourcePath(documents.sourcePath)
-        }
-        
-        return documents
+        // Apply zone_id update to original document
+        return updateZoneId(documents, ctx)
+    }
+    
+    private fun updateZoneId(documents: Yaml.Documents, ctx: ExecutionContext): Yaml.Documents {
+        val changeVisitor = ChangePropertyValue("zone_id", "auto", null, null, null).getVisitor()
+        val result = changeVisitor.visit(documents, ctx)
+        return if (result is Yaml.Documents) result else documents
     }
     
     private fun preprocessTemplates(content: String): String {
@@ -91,71 +80,53 @@ class YamlTemplateVisitor : YamlIsoVisitor<ExecutionContext>() {
     }
 }
 
-// Alternative implementation using ScanningRecipe for more control
-class UpdateYamlZoneIdWithTemplates : ScanningRecipe<UpdateYamlZoneIdWithTemplates.Accumulator>() {
+// Alternative simpler approach using string manipulation only
+class SimpleYamlTemplateRecipe : Recipe() {
     
-    data class Accumulator(val needsUpdate: Boolean = false)
-    
-    override fun getDisplayName(): String = "Update YAML zone_id handling templates"
+    override fun getDisplayName(): String = "Simple YAML template and zone_id update"
     
     override fun getDescription(): String = 
-        "Preprocesses YAML templates and updates zone_id to 'auto'"
+        "Wraps YAML templates in quotes and updates zone_id using string manipulation"
     
-    override fun getInitialValue(ctx: ExecutionContext): Accumulator = Accumulator()
-    
-    override fun getScanner(acc: Accumulator): TreeVisitor<*, ExecutionContext> = 
+    override fun getVisitor(): TreeVisitor<*, ExecutionContext> = 
         object : TreeVisitor<Tree, ExecutionContext>() {
             
             override fun visit(tree: Tree?, ctx: ExecutionContext): Tree? {
-                if (tree is SourceFile && isYamlFile(tree)) {
-                    return processYamlFile(tree, ctx)
+                if (tree is Yaml.Documents) {
+                    return processYamlDocument(tree, ctx)
                 }
-                return tree
+                return super.visit(tree, ctx)
             }
             
-            private fun isYamlFile(sourceFile: SourceFile): Boolean {
-                val path = sourceFile.sourcePath.toString()
-                return path.endsWith(".yml") || path.endsWith(".yaml")
-            }
-            
-            private fun processYamlFile(sourceFile: SourceFile, ctx: ExecutionContext): SourceFile {
-                val originalContent = sourceFile.printAll()
-                val processedContent = preprocessTemplates(originalContent)
+            private fun processYamlDocument(documents: Yaml.Documents, ctx: ExecutionContext): Yaml.Documents {
+                val originalContent = documents.printAll()
+                var modifiedContent = wrapTemplates(originalContent)
+                modifiedContent = updateZoneIdValue(modifiedContent)
                 
-                // Parse the preprocessed content
-                val yamlParser = YamlParser()
-                val parseResults = yamlParser.parseInputs(
-                    listOf(Parser.Input.fromString(sourceFile.sourcePath, processedContent)),
-                    null,
-                    ctx
-                )
-                
-                val iterator = parseResults.iterator()
-                if (!iterator.hasNext()) {
-                    return sourceFile
+                if (originalContent != modifiedContent) {
+                    try {
+                        val parser = YamlParser()
+                        val parsed = parser.parse(modifiedContent, documents.sourcePath, null)
+                        if (parsed.isNotEmpty() && parsed[0] is Yaml.Documents) {
+                            return parsed[0] as Yaml.Documents
+                        }
+                    } catch (e: Exception) {
+                        // Fall back to original if parsing fails
+                    }
                 }
                 
-                val parsedYaml = iterator.next()
-                
-                // Apply the zone_id update
-                val changePropertyVisitor = ChangePropertyValue("zone_id", "auto", null, null, null).getVisitor()
-                val updatedYaml = changePropertyVisitor.visit(parsedYaml, ctx)
-                
-                return if (updatedYaml != null && updatedYaml is SourceFile) {
-                    updatedYaml.withSourcePath(sourceFile.sourcePath)
-                } else {
-                    sourceFile
-                }
+                return documents
             }
             
-            private fun preprocessTemplates(content: String): String {
+            private fun wrapTemplates(content: String): String {
                 val templatePattern = Pattern.compile("^(\\s*[^:]+):\\s*([^\"']*\\{\\{[^}]*\\}\\}[^\"']*)\\s*$", 
                                                     Pattern.MULTILINE)
                 
                 return templatePattern.matcher(content).replaceAll { matchResult ->
                     val key = matchResult.group(1)
                     val value = matchResult.group(2).trim()
-                    if (!isAlreadyQuoted(value)) {
+                    
+                    if (!isQuoted(value)) {
                         "$key: \"$value\""
                     } else {
                         matchResult.group(0)
@@ -163,7 +134,12 @@ class UpdateYamlZoneIdWithTemplates : ScanningRecipe<UpdateYamlZoneIdWithTemplat
                 }
             }
             
-            private fun isAlreadyQuoted(value: String): Boolean {
+            private fun updateZoneIdValue(content: String): String {
+                val zoneIdPattern = Pattern.compile("^(\\s*zone_id\\s*):\\s*(.*)$", Pattern.MULTILINE)
+                return zoneIdPattern.matcher(content).replaceAll("$1: auto")
+            }
+            
+            private fun isQuoted(value: String): Boolean {
                 val trimmed = value.trim()
                 return (trimmed.startsWith("\"") && trimmed.endsWith("\"")) ||
                        (trimmed.startsWith("'") && trimmed.endsWith("'"))
