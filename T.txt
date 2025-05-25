@@ -50,8 +50,9 @@ class YamlTemplateVisitor : YamlIsoVisitor<ExecutionContext>() {
             ctx
         )
         
-        if (parsed.size > 0) {
-            val newDocument = parsed.iterator().next() as Yaml.Documents
+        val iterator = parsed.iterator()
+        if (iterator.hasNext()) {
+            val newDocument = iterator.next() as Yaml.Documents
             return newDocument.withSourcePath(documents.sourcePath)
         }
         
@@ -129,11 +130,12 @@ class UpdateYamlZoneIdWithTemplates : ScanningRecipe<UpdateYamlZoneIdWithTemplat
                     ctx
                 )
                 
-                if (parseResults.size == 0) {
+                val iterator = parseResults.iterator()
+                if (!iterator.hasNext()) {
                     return sourceFile
                 }
                 
-                val parsedYaml = parseResults.iterator().next()
+                val parsedYaml = iterator.next()
                 
                 // Apply the zone_id update
                 val changePropertyVisitor = ChangePropertyValue("zone_id", "auto", null, null, null).getVisitor()
