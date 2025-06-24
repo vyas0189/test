@@ -1,7 +1,7 @@
 import chainlit as cl
 import httpx
 import asyncio
-from typing import AsyncGenerator, List, Dict, Any
+from typing import AsyncGenerator, Dict, Any
 from datetime import datetime
 import logging
 
@@ -11,99 +11,88 @@ logger = logging.getLogger(__name__)
 
 # LLM API endpoint
 LLM_API_URL = "http://localhost:8080/llm"
-MAX_HISTORY_ITEMS = 50
 
-# Global variables for status and conversation management
+# Global variables for status
 api_status = {"status": "unknown", "last_check": None, "response_time": None}
-
-class ConversationManager:
-    def __init__(self):
-        self.conversations: Dict[str, List[Dict]] = {}
-    
-    def add_message(self, session_id: str, role: str, content: str):
-        if session_id not in self.conversations:
-            self.conversations[session_id] = []
-        
-        message = {
-            "role": role,
-            "content": content,
-            "timestamp": datetime.now().isoformat()
-        }
-        
-        self.conversations[session_id].append(message)
-        
-        # Keep only the last MAX_HISTORY_ITEMS messages
-        if len(self.conversations[session_id]) > MAX_HISTORY_ITEMS:
-            self.conversations[session_id] = self.conversations[session_id][-MAX_HISTORY_ITEMS:]
-    
-    def get_conversation(self, session_id: str) -> List[Dict]:
-        return self.conversations.get(session_id, [])
-    
-    def format_conversation_for_api(self, session_id: str) -> str:
-        """Format conversation history as a string for the API"""
-        conversation = self.get_conversation(session_id)
-        if not conversation:
-            return ""
-        
-        formatted = []
-        for msg in conversation[-10:]:  # Last 10 messages for context
-            role = "User" if msg['role'] == 'user' else "Assistant"
-            formatted.append(f"{role}: {msg['content']}")
-        
-        return "\n".join(formatted)
-
-# Initialize conversation manager
-conv_manager = ConversationManager()
 
 async def check_api_status():
     """Check if the LLM API is available"""
     global api_status
+    logger.info(f"Checking API status at {LLM_API_URL}")
+    
     try:
         start_time = datetime.now()
         async with httpx.AsyncClient() as client:
-            # Try to make a simple request to check connectivity
-            response = await client.get(f"{LLM_API_URL.replace('/llm', '')}/health", timeout=5.0)
-            response_time = (datetime.now() - start_time).total_seconds()
-            
-            if response.status_code == 200:
-                api_status = {
-                    "status": "online",
-                    "last_check": datetime.now().isoformat(),
-                    "response_time": response_time
-                }
-            else:
-                api_status = {
-                    "status": "error",
-                    "last_check": datetime.now().isoformat(),
-                    "error": f"HTTP {response.status_code}"
-                }
-    except httpx.RequestError as e:
+            # First try the health endpoint
+            try:
+                health_url = f"{LLM_API_URL.replace('/llm', '')}/health"
+                logger.info(f"Trying health endpoint: {health_url}")
+                response = await client.get(health_url, timeout=5.0)
+                response_time = (datetime.now() - start_time).total_seconds()
+                
+                if response.status_code == 200:
+                    api_status = {
+                        "status": "online",
+                        "last_check": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        "response_time": response_time
+                    }
+                    logger.info(f"Health check successful: {api_status}")
+                    return
+            except Exception as e:
+                logger.info(f"Health endpoint failed: {e}, trying LLM endpoint directly")
+                # If health endpoint doesn't exist, try a simple POST to the LLM endpoint
+                response = await client.post(
+                    LLM_API_URL,
+                    json={"prompt": "test"},
+                    headers={"Content-Type": "application/json"},
+                    timeout=5.0
+                )
+                response_time = (datetime.now() - start_time).total_seconds()
+                
+                if response.status_code in [200, 201, 204]:
+                    api_status = {
+                        "status": "online",
+                        "last_check": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        "response_time": response_time
+                    }
+                    logger.info(f"LLM endpoint check successful: {api_status}")
+                else:
+                    api_status = {
+                        "status": "error",
+                        "last_check": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        "error": f"HTTP {response.status_code}"
+                    }
+                    logger.warning(f"LLM endpoint returned error: {api_status}")
+    except httpx.ConnectError:
         api_status = {
             "status": "offline",
-            "last_check": datetime.now().isoformat(),
-            "error": str(e)
+            "last_check": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "error": "Cannot connect to API"
         }
+        logger.error(f"Connection error: {api_status}")
+    except httpx.TimeoutException:
+        api_status = {
+            "status": "offline",
+            "last_check": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "error": "Connection timeout"
+        }
+        logger.error(f"Timeout error: {api_status}")
     except Exception as e:
         api_status = {
             "status": "error",
-            "last_check": datetime.now().isoformat(),
+            "last_check": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "error": str(e)
         }
+        logger.error(f"Unexpected error: {api_status}")
 
-async def stream_from_llm_api(prompt: str, conversation_context: str = "") -> AsyncGenerator[str, None]:
+async def stream_from_llm_api(prompt: str) -> AsyncGenerator[str, None]:
     """Stream response from the LLM API"""
     try:
-        # Update API status before making request
-        await check_api_status()
-        
-        # Prepare the full prompt with conversation context
-        full_prompt = f"{conversation_context}\nUser: {prompt}\nAssistant:" if conversation_context else prompt
-        
         async with httpx.AsyncClient() as client:
             async with client.stream(
                 "POST", 
                 LLM_API_URL,
-                json={"prompt": full_prompt},
+                json={"prompt": prompt},
                 headers={"Content-Type": "application/json"},
                 timeout=60.0
             ) as response:
@@ -112,24 +101,23 @@ async def stream_from_llm_api(prompt: str, conversation_context: str = "") -> As
                 
                 # Update status to online since request succeeded
                 api_status["status"] = "online"
-                api_status["last_check"] = datetime.now().isoformat()
+                api_status["last_check"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 
-                # Process the streaming response direct content without JSON wrapping
+                # Process the streaming response
                 async for chunk in response.aiter_text():
-                    # The API now returns raw markdown content directly
                     if chunk:
                         yield chunk
                         
     except httpx.HTTPError as e:
         logger.error(f"HTTP error from LLM API: {e}")
         api_status["status"] = "error"
-        api_status["last_check"] = datetime.now().isoformat()
+        api_status["last_check"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         api_status["error"] = str(e)
         yield f"❌ Error connecting to LLM API: {str(e)}"
     except Exception as e:
         logger.error(f"Unexpected error: {e}")
         api_status["status"] = "error"
-        api_status["last_check"] = datetime.now().isoformat()
+        api_status["last_check"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         api_status["error"] = str(e)
         yield f"❌ Unexpected error: {str(e)}"
 
@@ -159,55 +147,10 @@ def create_status_text() -> str:
     
     return content
 
-def create_history_text(session_id: str) -> str:
-    """Create conversation history text"""
-    conversation = conv_manager.get_conversation(session_id)
-    
-    if not conversation:
-        return "## 💬 Conversation History\n\n*No messages yet. Start chatting!*"
-    
-    content = "## 💬 Conversation History\n\n"
-    
-    # Show last 6 messages in history
-    recent_messages = conversation[-6:]
-    
-    for msg in recent_messages:
-        timestamp = datetime.fromisoformat(msg['timestamp']).strftime("%H:%M")
-        role_icon = "👤" if msg['role'] == 'user' else "🤖"
-        
-        # Truncate long messages for display
-        content_preview = msg['content']
-        if len(content_preview) > 50:
-            content_preview = content_preview[:50] + "..."
-        
-        content += f"**{timestamp}** {role_icon} {content_preview}\n\n"
-    
-    return content
-
-async def send_status_update():
-    """Send status update as a separate message"""
-    try:
-        status_text = create_status_text()
-        await cl.Message(
-            content=status_text,
-            author="System"
-        ).send()
-    except Exception as e:
-        logger.error(f"Error sending status update: {e}")
-
-async def send_history_update(session_id: str):
-    """Send history update as a separate message"""
-    try:
-        history_text = create_history_text(session_id)
-        await cl.Message(
-            content=history_text,
-            author="History"
-        ).send()
-    except Exception as e:
-        logger.error(f"Error sending history update: {e}")
-
 async def periodic_status_check():
-    """Periodically check API status"""
+    """Periodically check API status and update if changed"""
+    last_status_message_id = None
+    
     while True:
         await asyncio.sleep(30)  # Check every 30 seconds
         old_status = api_status.get("status")
@@ -216,24 +159,48 @@ async def periodic_status_check():
         # Log status changes
         if api_status.get("status") != old_status:
             logger.info(f"API status changed from {old_status} to {api_status.get('status')}")
-            await send_status_update()
+            
+            # Send status update on change
+            status_text = create_status_text()
+            await cl.Message(
+                content=status_text,
+                author="System",
+                disable_feedback=True
+            ).send()
 
 @cl.on_chat_start
 async def start():
     """This function is called when a new chat starts."""
-    session_id = cl.user_session.get("id", "default")
-    
     # Initial status check
     await check_api_status()
     
-    # Send initial status and history
-    await send_status_update()
-    await send_history_update(session_id)
+    # Create a combined welcome message with status
+    status_icons = {
+        "online": "🟢",
+        "offline": "🔴", 
+        "error": "🟡",
+        "unknown": "⚫"
+    }
     
-    # Send welcome message
-    await cl.Message(
-        content="Hello! I'm your AI assistant powered by a local LLM API. How can I help you today? 🤖\n\n*Status updates and conversation history will appear as separate messages above.*"
-    ).send()
+    status_icon = status_icons.get(api_status["status"], "⚫")
+    status_text = api_status["status"].upper()
+    
+    welcome_message = f"""Hello! I'm your AI assistant powered by a local LLM API. 🤖
+
+**API Status:** {status_icon} {status_text}
+**Last Check:** {api_status.get('last_check', 'Never')}"""
+    
+    if api_status.get('response_time'):
+        welcome_message += f"\n**Response Time:** {api_status['response_time']:.3f}s"
+    
+    if api_status.get('error'):
+        welcome_message += f"\n**Error:** {api_status['error']}"
+    
+    welcome_message += "\n\nHow can I help you today?"
+    welcome_message += "\n\n💡 *Tip: Type `/status` anytime to check the API connection status.*"
+    
+    # Send welcome message with status
+    await cl.Message(content=welcome_message).send()
     
     # Start periodic status checks
     asyncio.create_task(periodic_status_check())
@@ -241,59 +208,57 @@ async def start():
 @cl.on_message
 async def main(message: cl.Message):
     """This function is called every time a user sends a message."""
-    session_id = cl.user_session.get("id", "default")
     user_message = message.content
     
-    # Add user message to conversation history
-    conv_manager.add_message(session_id, "user", user_message)
+    # Check for status command
+    if user_message.lower().strip() in ["/status", "status", "!status"]:
+        await check_api_status()
+        status_text = create_status_text()
+        await cl.Message(
+            content=status_text,
+            author="System",
+            disable_feedback=True
+        ).send()
+        return
     
-    # Get conversation context for the API
-    conversation_context = conv_manager.format_conversation_for_api(session_id)
+    # Show thinking indicator
+    step = cl.Step(name="🤔 Thinking...")
+    await step.send()
+    step.output = "🔍 Processing your message..."
+    await step.update()
     
-    # Show thinking indicator with step
-    async with cl.Step(name="🤔 Thinking...") as step:
-        step.output = "🔍 Processing your message and preparing response..."
+    # Initialize a new message for streaming
+    msg = cl.Message(content="")
+    full_response = ""
+    
+    try:
+        # Send the prompt and stream the response
+        response_started = False
+        async for text_chunk in stream_from_llm_api(user_message):
+            if not response_started:
+                # Remove the thinking step when response starts
+                await step.remove()
+                response_started = True
+            
+            # Update the message content as chunks arrive
+            full_response += text_chunk
+            await msg.stream_token(text_chunk)
         
-        # Initialize a new message with empty content for streaming
-        msg = cl.Message(content="")
-        full_response = ""
+        # Send the final message
+        await msg.send()
         
-        try:
-            # Send the prompt and stream the response
-            response_started = False
-            async for text_chunk in stream_from_llm_api(user_message, conversation_context):
-                if not response_started:
-                    # Update step when we start receiving response
-                    step.output = "✨ Generating response..."
-                    response_started = True
-                
-                # Update the message content as chunks arrive
-                full_response += text_chunk
-                await msg.stream_token(text_chunk)
+        # If no response was received, remove the step
+        if not response_started:
+            await step.remove()
             
-            # Update step when complete
-            if full_response:
-                step.output = "✅ Response generated successfully!"
-            else:
-                step.output = "⚠️ No response received from API"
-            
-            # Send the final message
-            await msg.send()
-            
-            # Add AI response to conversation history
-            conv_manager.add_message(session_id, "assistant", full_response)
-            
-            # Update history display
-            await send_history_update(session_id)
-            
-        except Exception as e:
-            # Update step with error and handle the exception
-            step.output = f"❌ Error: {str(e)}"
-            error_message = f"❌ Error processing your message: {str(e)}"
-            await cl.Message(content=error_message).send()
-            logger.error(f"Error in main handler: {e}")
+    except Exception as e:
+        # Remove step on error
+        await step.remove()
+        error_message = f"❌ Error processing your message: {str(e)}"
+        await cl.Message(content=error_message).send()
+        logger.error(f"Error in main handler: {e}")
 
-# Optional: Add settings for API configuration
+# Configure ChainLit settings for sidebar
 @cl.on_settings_update
 async def setup_agent(settings):
     """Handle settings updates"""
