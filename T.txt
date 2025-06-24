@@ -133,8 +133,8 @@ async def stream_from_llm_api(prompt: str, conversation_context: str = "") -> As
         api_status["error"] = str(e)
         yield f"❌ Unexpected error: {str(e)}"
 
-def create_status_element():
-    """Create a status display element"""
+def create_status_content():
+    """Create status display content as string"""
     status_icons = {
         "online": "🟢",
         "offline": "🔴", 
@@ -157,10 +157,10 @@ def create_status_element():
     if api_status.get('error'):
         content += f"\n❌ **Error:** {api_status['error']}"
     
-    return cl.Text(content=content, name="api_status", display="side")
+    return content
 
-def create_history_element(session_id: str):
-    """Create conversation history element"""
+def create_history_content(session_id: str):
+    """Create conversation history content as string"""
     conversation = conv_manager.get_conversation(session_id)
     
     if not conversation:
@@ -184,18 +184,35 @@ def create_history_element(session_id: str):
             
             content += f"**{timestamp}** {role_icon} {content_preview}\n\n"
     
-    return cl.Text(content=content, name="conversation_history", display="side")
+    return content
 
-async def update_sidebar_elements(session_id: str):
-    """Update both status and history elements"""
+def create_sidebar_elements(session_id: str):
+    """Create sidebar elements that can be attached to messages"""
+    status_element = cl.Text(
+        content=create_status_content(),
+        name="api_status",
+        display="side"
+    )
+    
+    history_element = cl.Text(
+        content=create_history_content(session_id),
+        name="conversation_history", 
+        display="side"
+    )
+    
+    return [status_element, history_element]
+
+async def send_sidebar_update(session_id: str):
+    """Send an update message with sidebar elements"""
     await check_api_status()
     
-    status_element = create_status_element()
-    history_element = create_history_element(session_id)
+    sidebar_elements = create_sidebar_elements(session_id)
     
-    # Update elements in the UI
-    await status_element.send()
-    await history_element.send()
+    # Send a minimal update message with sidebar elements
+    await cl.Message(
+        content="📋 *Sidebar updated*",
+        elements=sidebar_elements
+    ).send()
 
 @cl.on_chat_start
 async def start():
@@ -205,37 +222,28 @@ async def start():
     # Initial status check
     await check_api_status()
     
-    # Create and send initial sidebar elements
-    status_element = create_status_element()
-    history_element = create_history_element(session_id)
+    # Create sidebar elements
+    sidebar_elements = create_sidebar_elements(session_id)
     
-    await status_element.send()
-    await history_element.send()
-    
-    # Send welcome message
+    # Send welcome message with sidebar elements
     await cl.Message(
-        content="Hello! I'm your AI assistant powered by a local LLM API. How can I help you today? 🤖\n\n*Check the sidebar for API status and conversation history.*"
+        content="Hello! I'm your AI assistant powered by a local LLM API. How can I help you today? 🤖\n\n*Check the sidebar for API status and conversation history.*",
+        elements=sidebar_elements
     ).send()
     
     # Start periodic status checks
     asyncio.create_task(periodic_status_check())
 
 async def periodic_status_check():
-    """Periodically check API status and update UI"""
+    """Periodically check API status"""
     while True:
         await asyncio.sleep(30)  # Check every 30 seconds
-        session_id = cl.user_session.get("id", "default")
-        
         old_status = api_status.get("status")
         await check_api_status()
         
-        # Only update UI if status changed
+        # Log status changes
         if api_status.get("status") != old_status:
-            try:
-                status_element = create_status_element()
-                await status_element.send()
-            except Exception as e:
-                logger.error(f"Error updating status UI: {e}")
+            logger.info(f"API status changed from {old_status} to {api_status.get('status')}")
 
 @cl.on_message
 async def main(message: cl.Message):
@@ -261,14 +269,15 @@ async def main(message: cl.Message):
             full_response += text_chunk
             await msg.stream_token(text_chunk)
         
-        # Send the final message
-        await msg.send()
-        
         # Add AI response to conversation history
         conv_manager.add_message(session_id, "assistant", full_response)
         
-        # Update sidebar elements
-        await update_sidebar_elements(session_id)
+        # Get updated sidebar elements
+        sidebar_elements = create_sidebar_elements(session_id)
+        
+        # Update the message with sidebar elements and send
+        msg.elements = sidebar_elements
+        await msg.send()
         
     except Exception as e:
         # Handle any unexpected errors
