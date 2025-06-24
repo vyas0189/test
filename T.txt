@@ -1,49 +1,71 @@
-# .chainlit/config.toml
+/* public/custom.css */
 
-[project]
-# Whether to enable telemetry (default: true)
-enable_telemetry = true
+/* Sidebar styling */
+.chat-history-sidebar {
+    background-color: #1e1e1e;
+    border-right: 1px solid #333;
+}
 
-# List of environment variables to be provided by each user to use the app
-user_env = []
+/* Chat history items */
+.chat-history-item {
+    padding: 12px 16px;
+    cursor: pointer;
+    transition: background-color 0.2s;
+    border-radius: 6px;
+    margin: 4px 8px;
+    color: #e0e0e0;
+    font-size: 14px;
+}
 
-# Duration (in seconds) during which the session is saved when the connection is lost
-session_timeout = 3600
+.chat-history-item:hover {
+    background-color: #2a2a2a;
+}
 
-# Enable chat history
-enable_history = true
+.chat-history-item.active {
+    background-color: #333;
+}
 
-[features]
-# Enable multi-modal file upload
-multi_modal = true
+/* New chat button */
+.new-chat-button {
+    width: calc(100% - 16px);
+    margin: 8px;
+    padding: 10px;
+    background-color: #444;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background-color 0.2s;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
 
-# Enable conversation history
-conversation_history = true
+.new-chat-button:hover {
+    background-color: #555;
+}
 
-[UI]
-# Name of the app and chatbot
-name = "LLM Chatbot"
+/* Sidebar header */
+.sidebar-header {
+    padding: 16px;
+    border-bottom: 1px solid #333;
+    color: #e0e0e0;
+    font-weight: 500;
+}
 
-# Description of the app
-description = "Chat with your local LLM"
+/* Main chat area */
+.main-chat-area {
+    background-color: #0a0a0a;
+}
 
-# Large size content are by default collapsed for a cleaner ui
-default_collapse_content = true
+/* Message styling */
+.message-container {
+    max-width: 800px;
+    margin: 0 auto;
+}
 
-# The default value for the expand messages settings
-default_expand_messages = false
-
-# Hide the chain of thought details
-hide_cot = false
-
-# Link to your GitHub repo
-# github = ""
-
-# Override default theme
-[UI.theme]
-# primary = "#1E88E5"
-# background = "#FAFAFA"
-# paper = "#FFFFFF"
-
-[meta]
-generated_by = "1.0.0"
+/* Input area */
+.input-container {
+    background-color: #1a1a1a;
+    border-top: 1px solid #333;
+}
