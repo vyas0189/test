@@ -1,22 +1,20 @@
 import chainlit as cl
-import requests
-import json
+import httpx
 import asyncio
+from typing import AsyncGenerator, List, Dict, Any
 from datetime import datetime
-from typing import List, Dict, Any
 import logging
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Configuration
+# LLM API endpoint (fixed the typo from "11m" to "llm")
 LLM_API_URL = "http://localhost:8080/llm"
 MAX_HISTORY_ITEMS = 50
 
-# Global variables to store conversation history and status
-conversation_history: List[Dict[str, Any]] = []
-api_status = {"status": "unknown", "last_check": None}
+# Global variables for status and conversation management
+api_status = {"status": "unknown", "last_check": None, "response_time": None}
 
 class ConversationManager:
     def __init__(self):
@@ -41,8 +39,18 @@ class ConversationManager:
     def get_conversation(self, session_id: str) -> List[Dict]:
         return self.conversations.get(session_id, [])
     
-    def get_all_conversations(self) -> Dict[str, List[Dict]]:
-        return self.conversations
+    def format_conversation_for_api(self, session_id: str) -> str:
+        """Format conversation history as a string for the API"""
+        conversation = self.get_conversation(session_id)
+        if not conversation:
+            return ""
+        
+        formatted = []
+        for msg in conversation[-10:]:  # Last 10 messages for context
+            role = "User" if msg['role'] == 'user' else "Assistant"
+            formatted.append(f"{role}: {msg['content']}")
+        
+        return "\n".join(formatted)
 
 # Initialize conversation manager
 conv_manager = ConversationManager()
@@ -51,20 +59,25 @@ async def check_api_status():
     """Check if the LLM API is available"""
     global api_status
     try:
-        response = requests.get(f"{LLM_API_URL}/health", timeout=5)
-        if response.status_code == 200:
-            api_status = {
-                "status": "online",
-                "last_check": datetime.now().isoformat(),
-                "response_time": response.elapsed.total_seconds()
-            }
-        else:
-            api_status = {
-                "status": "error",
-                "last_check": datetime.now().isoformat(),
-                "error": f"HTTP {response.status_code}"
-            }
-    except requests.exceptions.RequestException as e:
+        start_time = datetime.now()
+        async with httpx.AsyncClient() as client:
+            # Try to make a simple request to check connectivity
+            response = await client.get(f"{LLM_API_URL.replace('/llm', '')}/health", timeout=5.0)
+            response_time = (datetime.now() - start_time).total_seconds()
+            
+            if response.status_code == 200:
+                api_status = {
+                    "status": "online",
+                    "last_check": datetime.now().isoformat(),
+                    "response_time": response_time
+                }
+            else:
+                api_status = {
+                    "status": "error",
+                    "last_check": datetime.now().isoformat(),
+                    "error": f"HTTP {response.status_code}"
+                }
+    except httpx.RequestError as e:
         api_status = {
             "status": "offline",
             "last_check": datetime.now().isoformat(),
@@ -77,174 +90,199 @@ async def check_api_status():
             "error": str(e)
         }
 
-async def call_llm_api(message: str, conversation_context: List[Dict] = None) -> str:
-    """Call the LLM API with the user message"""
+async def stream_from_llm_api(prompt: str, conversation_context: str = "") -> AsyncGenerator[str, None]:
+    """Stream response from the LLM API"""
     try:
-        # Prepare the payload
-        payload = {
-            "message": message,
-            "context": conversation_context or []
-        }
+        # Update API status before making request
+        await check_api_status()
         
-        # Make the API call
-        response = requests.post(
-            LLM_API_URL,
-            json=payload,
-            headers={"Content-Type": "application/json"},
-            timeout=30
-        )
+        # Prepare the full prompt with conversation context
+        full_prompt = f"{conversation_context}\nUser: {prompt}\nAssistant:" if conversation_context else prompt
         
-        if response.status_code == 200:
-            result = response.json()
-            return result.get("response", "No response from API")
-        else:
-            return f"API Error: HTTP {response.status_code} - {response.text}"
-            
-    except requests.exceptions.RequestException as e:
-        logger.error(f"API call failed: {e}")
-        return f"Failed to connect to LLM API: {str(e)}"
+        async with httpx.AsyncClient() as client:
+            async with client.stream(
+                "POST", 
+                LLM_API_URL,
+                json={"prompt": full_prompt},
+                headers={"Content-Type": "application/json"},
+                timeout=60.0
+            ) as response:
+                # Check if the request was successful
+                response.raise_for_status()
+                
+                # Update status to online since request succeeded
+                api_status["status"] = "online"
+                api_status["last_check"] = datetime.now().isoformat()
+                
+                # Process the streaming response direct content without JSON wrapping
+                async for chunk in response.aiter_text():
+                    # The API now returns raw markdown content directly
+                    if chunk:
+                        yield chunk
+                        
+    except httpx.HTTPError as e:
+        logger.error(f"HTTP error from LLM API: {e}")
+        api_status["status"] = "error"
+        api_status["last_check"] = datetime.now().isoformat()
+        api_status["error"] = str(e)
+        yield f"❌ Error connecting to LLM API: {str(e)}"
     except Exception as e:
         logger.error(f"Unexpected error: {e}")
-        return f"Unexpected error: {str(e)}"
+        api_status["status"] = "error"
+        api_status["last_check"] = datetime.now().isoformat()
+        api_status["error"] = str(e)
+        yield f"❌ Unexpected error: {str(e)}"
 
 def create_status_element():
     """Create a status display element"""
-    status_color = {
+    status_icons = {
         "online": "🟢",
         "offline": "🔴", 
         "error": "🟡",
         "unknown": "⚫"
-    }.get(api_status["status"], "⚫")
+    }
     
-    status_text = f"""
-    **API Status:** {status_color} {api_status['status'].upper()}
+    status_icon = status_icons.get(api_status["status"], "⚫")
+    status_text = api_status["status"].upper()
     
-    **Last Check:** {api_status.get('last_check', 'Never')}
+    content = f"""## 📊 API Status
     
-    {f"**Response Time:** {api_status.get('response_time', 0):.3f}s" if api_status.get('response_time') else ''}
+{status_icon} **Status:** {status_text}
+
+⏰ **Last Check:** {api_status.get('last_check', 'Never')}"""
+
+    if api_status.get('response_time'):
+        content += f"\n⚡ **Response Time:** {api_status['response_time']:.3f}s"
     
-    {f"**Error:** {api_status.get('error', '')}" if api_status.get('error') else ''}
-    """
+    if api_status.get('error'):
+        content += f"\n❌ **Error:** {api_status['error']}"
     
-    return cl.Text(content=status_text)
+    return cl.Text(content=content, name="api_status", display="side")
 
 def create_history_element(session_id: str):
     """Create conversation history element"""
     conversation = conv_manager.get_conversation(session_id)
     
     if not conversation:
-        return cl.Text(content="**Conversation History**\n\nNo messages yet.")
+        content = """## 💬 Conversation History
+        
+*No messages yet. Start chatting!*"""
+    else:
+        content = "## 💬 Conversation History\n\n"
+        
+        # Show last 8 messages in history panel
+        recent_messages = conversation[-8:]
+        
+        for msg in recent_messages:
+            timestamp = datetime.fromisoformat(msg['timestamp']).strftime("%H:%M")
+            role_icon = "👤" if msg['role'] == 'user' else "🤖"
+            
+            # Truncate long messages for display
+            content_preview = msg['content']
+            if len(content_preview) > 60:
+                content_preview = content_preview[:60] + "..."
+            
+            content += f"**{timestamp}** {role_icon} {content_preview}\n\n"
     
-    history_text = "**Conversation History**\n\n"
-    
-    for msg in conversation[-10:]:  # Show last 10 messages
-        timestamp = datetime.fromisoformat(msg['timestamp']).strftime("%H:%M")
-        role_icon = "👤" if msg['role'] == 'user' else "🤖"
-        content_preview = msg['content'][:50] + "..." if len(msg['content']) > 50 else msg['content']
-        history_text += f"{role_icon} **{timestamp}** {content_preview}\n\n"
-    
-    return cl.Text(content=history_text)
+    return cl.Text(content=content, name="conversation_history", display="side")
 
-@cl.on_chat_start
-async def start():
-    """Initialize the chat session"""
-    session_id = cl.user_session.get("id", "default")
-    
-    # Check API status
+async def update_sidebar_elements(session_id: str):
+    """Update both status and history elements"""
     await check_api_status()
     
-    # Create initial UI elements
     status_element = create_status_element()
     history_element = create_history_element(session_id)
     
-    # Send initial status and history to sidebar
+    # Update elements in the UI
+    await status_element.send()
+    await history_element.send()
+
+@cl.on_chat_start
+async def start():
+    """This function is called when a new chat starts."""
+    session_id = cl.user_session.get("id", "default")
+    
+    # Initial status check
+    await check_api_status()
+    
+    # Create and send initial sidebar elements
+    status_element = create_status_element()
+    history_element = create_history_element(session_id)
+    
+    await status_element.send()
+    await history_element.send()
+    
+    # Send welcome message
     await cl.Message(
-        content="Welcome to the AI Chatbot! 🤖",
-        elements=[status_element, history_element]
+        content="Hello! I'm your AI assistant powered by a local LLM API. How can I help you today? 🤖\n\n*Check the sidebar for API status and conversation history.*"
     ).send()
     
     # Start periodic status checks
     asyncio.create_task(periodic_status_check())
 
 async def periodic_status_check():
-    """Periodically check API status"""
+    """Periodically check API status and update UI"""
     while True:
         await asyncio.sleep(30)  # Check every 30 seconds
+        session_id = cl.user_session.get("id", "default")
+        
+        old_status = api_status.get("status")
         await check_api_status()
+        
+        # Only update UI if status changed
+        if api_status.get("status") != old_status:
+            try:
+                status_element = create_status_element()
+                await status_element.send()
+            except Exception as e:
+                logger.error(f"Error updating status UI: {e}")
 
 @cl.on_message
 async def main(message: cl.Message):
-    """Handle incoming messages"""
+    """This function is called every time a user sends a message."""
     session_id = cl.user_session.get("id", "default")
     user_message = message.content
     
     # Add user message to conversation history
     conv_manager.add_message(session_id, "user", user_message)
     
-    # Get conversation context
-    conversation_context = conv_manager.get_conversation(session_id)
+    # Get conversation context for the API
+    conversation_context = conv_manager.format_conversation_for_api(session_id)
     
-    # Show typing indicator
-    async with cl.Step(name="Thinking...") as step:
-        step.output = "Processing your message..."
+    # Initialize a new message with empty content for streaming
+    msg = cl.Message(content="")
+    
+    full_response = ""
+    
+    try:
+        # Send the prompt and stream the response
+        async for text_chunk in stream_from_llm_api(user_message, conversation_context):
+            # Update the message content as chunks arrive
+            full_response += text_chunk
+            await msg.stream_token(text_chunk)
         
-        # Call the LLM API
-        response = await call_llm_api(user_message, conversation_context)
-    
-    # Add AI response to conversation history
-    conv_manager.add_message(session_id, "assistant", response)
-    
-    # Update status and history elements
-    await check_api_status()
-    status_element = create_status_element()
-    history_element = create_history_element(session_id)
-    
-    # Send response with updated sidebar elements
-    await cl.Message(
-        content=response,
-        elements=[status_element, history_element]
-    ).send()
+        # Send the final message
+        await msg.send()
+        
+        # Add AI response to conversation history
+        conv_manager.add_message(session_id, "assistant", full_response)
+        
+        # Update sidebar elements
+        await update_sidebar_elements(session_id)
+        
+    except Exception as e:
+        # Handle any unexpected errors
+        error_message = f"❌ Error processing your message: {str(e)}"
+        await cl.Message(content=error_message).send()
+        logger.error(f"Error in main handler: {e}")
 
+# Optional: Add settings for API configuration
 @cl.on_settings_update
 async def setup_agent(settings):
     """Handle settings updates"""
-    print("Settings updated:", settings)
-
-# Custom CSS for better layout
-custom_css = """
-.sidebar {
-    width: 300px;
-    background-color: #f5f5f5;
-    padding: 15px;
-    border-right: 1px solid #ddd;
-}
-
-.main-chat {
-    flex: 1;
-    padding: 15px;
-}
-
-.status-indicator {
-    background-color: #fff;
-    border: 1px solid #ddd;
-    border-radius: 8px;
-    padding: 10px;
-    margin-bottom: 15px;
-}
-
-.history-panel {
-    background-color: #fff;
-    border: 1px solid #ddd;
-    border-radius: 8px;
-    padding: 10px;
-    max-height: 400px;
-    overflow-y: auto;
-}
-"""
-
-# Add custom CSS to ChainLit
-cl.HTML(head=f"<style>{custom_css}</style>")
+    logger.info(f"Settings updated: {settings}")
 
 if __name__ == "__main__":
     # This would typically be run with: chainlit run app.py
-    pass
+    logger.info("Starting ChainLit application...")
+    logger.info(f"LLM API URL: {LLM_API_URL}")
