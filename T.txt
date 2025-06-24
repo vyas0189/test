@@ -1,114 +1,250 @@
-package com.example.recipes
+import chainlit as cl
+import requests
+import json
+import asyncio
+from datetime import datetime
+from typing import List, Dict, Any
+import logging
 
-import org.openrewrite.ExecutionContext
-import org.openrewrite.Recipe
-import org.openrewrite.TreeVisitor
-import org.openrewrite.text.PlainText
-import org.openrewrite.text.PlainTextVisitor
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-class UpdateZoneIdToAuto : Recipe() {
-    
-    override fun getDisplayName(): String = "Update zone_id value to auto"
-    
-    override fun getDescription(): String = "Updates the value of zone_id key to 'auto' in text files"
-    
-    override fun getVisitor(): TreeVisitor<*, ExecutionContext> {
-        return ZoneIdUpdaterVisitor()
-    }
-}
+# Configuration
+LLM_API_URL = "http://localhost:8080/llm"
+MAX_HISTORY_ITEMS = 50
 
-class ZoneIdUpdaterVisitor : PlainTextVisitor<ExecutionContext>() {
+# Global variables to store conversation history and status
+conversation_history: List[Dict[str, Any]] = []
+api_status = {"status": "unknown", "last_check": None}
+
+class ConversationManager:
+    def __init__(self):
+        self.conversations: Dict[str, List[Dict]] = {}
     
-    override fun visitText(text: PlainText, ctx: ExecutionContext): PlainText {
-        val content = text.text
+    def add_message(self, session_id: str, role: str, content: str):
+        if session_id not in self.conversations:
+            self.conversations[session_id] = []
         
-        // Pattern to match zone_id with various formats
-        val patterns = listOf(
-            // JSON-like format: "zone_id": "value"
-            Regex("""("zone_id"\s*:\s*)"[^"]*""""),
-            // YAML-like format: zone_id: value
-            Regex("""(zone_id\s*:\s*)[^\s\n]+"""),
-            // Properties format: zone_id=value
-            Regex("""(zone_id\s*=\s*)[^\s\n]+"""),
-            // XML-like attribute: zone_id="value"
-            Regex("""(zone_id\s*=\s*)"[^"]*""""),
-            // TOML format: zone_id = "value"
-            Regex("""(zone_id\s*=\s*)"[^"]*"""")
+        message = {
+            "role": role,
+            "content": content,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        self.conversations[session_id].append(message)
+        
+        # Keep only the last MAX_HISTORY_ITEMS messages
+        if len(self.conversations[session_id]) > MAX_HISTORY_ITEMS:
+            self.conversations[session_id] = self.conversations[session_id][-MAX_HISTORY_ITEMS:]
+    
+    def get_conversation(self, session_id: str) -> List[Dict]:
+        return self.conversations.get(session_id, [])
+    
+    def get_all_conversations(self) -> Dict[str, List[Dict]]:
+        return self.conversations
+
+# Initialize conversation manager
+conv_manager = ConversationManager()
+
+async def check_api_status():
+    """Check if the LLM API is available"""
+    global api_status
+    try:
+        response = requests.get(f"{LLM_API_URL}/health", timeout=5)
+        if response.status_code == 200:
+            api_status = {
+                "status": "online",
+                "last_check": datetime.now().isoformat(),
+                "response_time": response.elapsed.total_seconds()
+            }
+        else:
+            api_status = {
+                "status": "error",
+                "last_check": datetime.now().isoformat(),
+                "error": f"HTTP {response.status_code}"
+            }
+    except requests.exceptions.RequestException as e:
+        api_status = {
+            "status": "offline",
+            "last_check": datetime.now().isoformat(),
+            "error": str(e)
+        }
+    except Exception as e:
+        api_status = {
+            "status": "error",
+            "last_check": datetime.now().isoformat(),
+            "error": str(e)
+        }
+
+async def call_llm_api(message: str, conversation_context: List[Dict] = None) -> str:
+    """Call the LLM API with the user message"""
+    try:
+        # Prepare the payload
+        payload = {
+            "message": message,
+            "context": conversation_context or []
+        }
+        
+        # Make the API call
+        response = requests.post(
+            LLM_API_URL,
+            json=payload,
+            headers={"Content-Type": "application/json"},
+            timeout=30
         )
         
-        var updatedContent = content
-        var wasUpdated = false
-        
-        // Try each pattern and update if found
-        for (pattern in patterns) {
-            val newContent = pattern.replace(updatedContent) { matchResult ->
-                wasUpdated = true
-                val prefix = matchResult.groupValues[1]
-                when {
-                    // JSON format
-                    prefix.contains(":") && prefix.contains("\"") -> "${prefix}\"auto\""
-                    // YAML format (no quotes needed typically)
-                    prefix.contains(":") -> "${prefix}auto"
-                    // Properties format
-                    prefix.contains("=") && !prefix.contains("\"") -> "${prefix}auto"
-                    // XML/TOML format with quotes
-                    prefix.contains("=") && prefix.contains("\"") -> "${prefix}\"auto\""
-                    else -> "${prefix}auto"
-                }
-            }
+        if response.status_code == 200:
+            result = response.json()
+            return result.get("response", "No response from API")
+        else:
+            return f"API Error: HTTP {response.status_code} - {response.text}"
             
-            if (newContent != updatedContent) {
-                updatedContent = newContent
-                break // Found and updated, no need to try other patterns
-            }
-        }
+    except requests.exceptions.RequestException as e:
+        logger.error(f"API call failed: {e}")
+        return f"Failed to connect to LLM API: {str(e)}"
+    except Exception as e:
+        logger.error(f"Unexpected error: {e}")
+        return f"Unexpected error: {str(e)}"
+
+def create_status_element():
+    """Create a status display element"""
+    status_color = {
+        "online": "🟢",
+        "offline": "🔴", 
+        "error": "🟡",
+        "unknown": "⚫"
+    }.get(api_status["status"], "⚫")
+    
+    status_text = f"""
+    **API Status:** {status_color} {api_status['status'].upper()}
+    
+    **Last Check:** {api_status.get('last_check', 'Never')}
+    
+    {f"**Response Time:** {api_status.get('response_time', 0):.3f}s" if api_status.get('response_time') else ''}
+    
+    {f"**Error:** {api_status.get('error', '')}" if api_status.get('error') else ''}
+    """
+    
+    return cl.Text(content=status_text)
+
+def create_history_element(session_id: str):
+    """Create conversation history element"""
+    conversation = conv_manager.get_conversation(session_id)
+    
+    if not conversation:
+        return cl.Text(content="**Conversation History**\n\nNo messages yet.")
+    
+    history_text = "**Conversation History**\n\n"
+    
+    for msg in conversation[-10:]:  # Show last 10 messages
+        timestamp = datetime.fromisoformat(msg['timestamp']).strftime("%H:%M")
+        role_icon = "👤" if msg['role'] == 'user' else "🤖"
+        content_preview = msg['content'][:50] + "..." if len(msg['content']) > 50 else msg['content']
+        history_text += f"{role_icon} **{timestamp}** {content_preview}\n\n"
+    
+    return cl.Text(content=history_text)
+
+@cl.on_chat_start
+async def start():
+    """Initialize the chat session"""
+    session_id = cl.user_session.get("id", "default")
+    
+    # Check API status
+    await check_api_status()
+    
+    # Create initial UI elements
+    status_element = create_status_element()
+    history_element = create_history_element(session_id)
+    
+    # Send initial status and history to sidebar
+    await cl.Message(
+        content="Welcome to the AI Chatbot! 🤖",
+        elements=[status_element, history_element]
+    ).send()
+    
+    # Start periodic status checks
+    asyncio.create_task(periodic_status_check())
+
+async def periodic_status_check():
+    """Periodically check API status"""
+    while True:
+        await asyncio.sleep(30)  # Check every 30 seconds
+        await check_api_status()
+
+@cl.on_message
+async def main(message: cl.Message):
+    """Handle incoming messages"""
+    session_id = cl.user_session.get("id", "default")
+    user_message = message.content
+    
+    # Add user message to conversation history
+    conv_manager.add_message(session_id, "user", user_message)
+    
+    # Get conversation context
+    conversation_context = conv_manager.get_conversation(session_id)
+    
+    # Show typing indicator
+    async with cl.Step(name="Thinking...") as step:
+        step.output = "Processing your message..."
         
-        return if (wasUpdated) {
-            text.withText(updatedContent)
-        } else {
-            text
-        }
-    }
+        # Call the LLM API
+        response = await call_llm_api(user_message, conversation_context)
+    
+    # Add AI response to conversation history
+    conv_manager.add_message(session_id, "assistant", response)
+    
+    # Update status and history elements
+    await check_api_status()
+    status_element = create_status_element()
+    history_element = create_history_element(session_id)
+    
+    # Send response with updated sidebar elements
+    await cl.Message(
+        content=response,
+        elements=[status_element, history_element]
+    ).send()
+
+@cl.on_settings_update
+async def setup_agent(settings):
+    """Handle settings updates"""
+    print("Settings updated:", settings)
+
+# Custom CSS for better layout
+custom_css = """
+.sidebar {
+    width: 300px;
+    background-color: #f5f5f5;
+    padding: 15px;
+    border-right: 1px solid #ddd;
 }
 
-// Alternative more specific visitor if you know the exact format
-class JsonZoneIdUpdaterVisitor : PlainTextVisitor<ExecutionContext>() {
-    
-    override fun visitText(text: PlainText, ctx: ExecutionContext): PlainText {
-        val content = text.text
-        
-        // Specifically for JSON format: "zone_id": "any_value"
-        val jsonPattern = Regex("""("zone_id"\s*:\s*)"[^"]*"""")
-        
-        val updatedContent = jsonPattern.replace(content) { matchResult ->
-            """${matchResult.groupValues[1]}"auto""""
-        }
-        
-        return if (updatedContent != content) {
-            text.withText(updatedContent)
-        } else {
-            text
-        }
-    }
+.main-chat {
+    flex: 1;
+    padding: 15px;
 }
 
-// Alternative for YAML format specifically
-class YamlZoneIdUpdaterVisitor : PlainTextVisitor<ExecutionContext>() {
-    
-    override fun visitText(text: PlainText, ctx: ExecutionContext): PlainText {
-        val content = text.text
-        
-        // Specifically for YAML format: zone_id: any_value
-        val yamlPattern = Regex("""(zone_id\s*:\s*)[^\s\n]+""")
-        
-        val updatedContent = yamlPattern.replace(content) { matchResult ->
-            "${matchResult.groupValues[1]}auto"
-        }
-        
-        return if (updatedContent != content) {
-            text.withText(updatedContent)
-        } else {
-            text
-        }
-    }
+.status-indicator {
+    background-color: #fff;
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    padding: 10px;
+    margin-bottom: 15px;
 }
+
+.history-panel {
+    background-color: #fff;
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    padding: 10px;
+    max-height: 400px;
+    overflow-y: auto;
+}
+"""
+
+# Add custom CSS to ChainLit
+cl.HTML(head=f"<style>{custom_css}</style>")
+
+if __name__ == "__main__":
+    # This would typically be run with: chainlit run app.py
+    pass
