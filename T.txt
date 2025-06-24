@@ -9,7 +9,7 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# LLM API endpoint (fixed the typo from "11m" to "llm")
+# LLM API endpoint
 LLM_API_URL = "http://localhost:8080/llm"
 MAX_HISTORY_ITEMS = 50
 
@@ -54,6 +54,18 @@ class ConversationManager:
 
 # Initialize conversation manager
 conv_manager = ConversationManager()
+
+async def show_thinking_animation():
+    """Create a thinking animation with dots"""
+    thinking_states = [
+        "🤔 Thinking",
+        "🤔 Thinking.",
+        "🤔 Thinking..",
+        "🤔 Thinking..."
+    ]
+    for state in thinking_states:
+        yield state
+        await asyncio.sleep(0.5)
 
 async def check_api_status():
     """Check if the LLM API is available"""
@@ -133,8 +145,10 @@ async def stream_from_llm_api(prompt: str, conversation_context: str = "") -> As
         api_status["error"] = str(e)
         yield f"❌ Unexpected error: {str(e)}"
 
-def create_status_content():
-    """Create status display content as string"""
+def create_sidebar_html(session_id: str) -> str:
+    """Create HTML for the sidebar with status and history"""
+    
+    # Status section
     status_icons = {
         "online": "🟢",
         "offline": "🔴", 
@@ -145,94 +159,249 @@ def create_status_content():
     status_icon = status_icons.get(api_status["status"], "⚫")
     status_text = api_status["status"].upper()
     
-    content = f"""## 📊 API Status
+    status_html = f"""
+    <div class="status-section">
+        <h3>📊 API Status</h3>
+        <div class="status-item">
+            <span class="status-indicator">{status_icon}</span>
+            <strong>{status_text}</strong>
+        </div>
+        <div class="status-detail">⏰ Last Check: {api_status.get('last_check', 'Never')}</div>
+    """
     
-{status_icon} **Status:** {status_text}
-
-⏰ **Last Check:** {api_status.get('last_check', 'Never')}"""
-
     if api_status.get('response_time'):
-        content += f"\n⚡ **Response Time:** {api_status['response_time']:.3f}s"
+        status_html += f'<div class="status-detail">⚡ Response Time: {api_status["response_time"]:.3f}s</div>'
     
     if api_status.get('error'):
-        content += f"\n❌ **Error:** {api_status['error']}"
+        status_html += f'<div class="status-error">❌ Error: {api_status["error"]}</div>'
     
-    return content
-
-def create_history_content(session_id: str):
-    """Create conversation history content as string"""
+    status_html += "</div>"
+    
+    # History section
     conversation = conv_manager.get_conversation(session_id)
     
+    history_html = """
+    <div class="history-section">
+        <h3>💬 Conversation History</h3>
+        <div class="history-container">
+    """
+    
     if not conversation:
-        content = """## 💬 Conversation History
-        
-*No messages yet. Start chatting!*"""
+        history_html += '<div class="no-history">No messages yet. Start chatting!</div>'
     else:
-        content = "## 💬 Conversation History\n\n"
-        
         # Show last 8 messages in history panel
         recent_messages = conversation[-8:]
         
         for msg in recent_messages:
             timestamp = datetime.fromisoformat(msg['timestamp']).strftime("%H:%M")
             role_icon = "👤" if msg['role'] == 'user' else "🤖"
+            role_class = "user" if msg['role'] == 'user' else "assistant"
             
             # Truncate long messages for display
             content_preview = msg['content']
             if len(content_preview) > 60:
                 content_preview = content_preview[:60] + "..."
             
-            content += f"**{timestamp}** {role_icon} {content_preview}\n\n"
+            history_html += f"""
+            <div class="history-item {role_class}">
+                <div class="history-header">
+                    <span class="role-icon">{role_icon}</span>
+                    <span class="timestamp">{timestamp}</span>
+                </div>
+                <div class="history-content">{content_preview}</div>
+            </div>
+            """
     
-    return content
+    history_html += """
+        </div>
+    </div>
+    """
+    
+    # Combine everything
+    sidebar_html = f"""
+    <div class="sidebar">
+        {status_html}
+        {history_html}
+    </div>
+    """
+    
+    return sidebar_html
 
-def create_sidebar_elements(session_id: str):
-    """Create sidebar elements that can be attached to messages"""
-    status_element = cl.Text(
-        content=create_status_content(),
-        name="api_status",
-        display="side"
-    )
+def create_main_layout_css() -> str:
+    """Create CSS for the main layout"""
+    return """
+    <style>
+    .sidebar {
+        position: fixed;
+        left: 0;
+        top: 0;
+        width: 300px;
+        height: 100vh;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        padding: 20px;
+        box-sizing: border-box;
+        overflow-y: auto;
+        z-index: 1000;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    }
     
-    history_element = cl.Text(
-        content=create_history_content(session_id),
-        name="conversation_history", 
-        display="side"
-    )
+    .status-section {
+        background: rgba(255, 255, 255, 0.1);
+        border-radius: 10px;
+        padding: 15px;
+        margin-bottom: 20px;
+        backdrop-filter: blur(10px);
+    }
     
-    return [status_element, history_element]
+    .status-section h3 {
+        margin: 0 0 15px 0;
+        font-size: 16px;
+        font-weight: 600;
+    }
+    
+    .status-item {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 8px;
+        font-size: 14px;
+    }
+    
+    .status-indicator {
+        font-size: 16px;
+    }
+    
+    .status-detail {
+        font-size: 12px;
+        opacity: 0.8;
+        margin-bottom: 4px;
+    }
+    
+    .status-error {
+        font-size: 12px;
+        color: #ffcccb;
+        margin-top: 8px;
+    }
+    
+    .history-section {
+        background: rgba(255, 255, 255, 0.1);
+        border-radius: 10px;
+        padding: 15px;
+        backdrop-filter: blur(10px);
+    }
+    
+    .history-section h3 {
+        margin: 0 0 15px 0;
+        font-size: 16px;
+        font-weight: 600;
+    }
+    
+    .history-container {
+        max-height: 400px;
+        overflow-y: auto;
+    }
+    
+    .history-item {
+        background: rgba(255, 255, 255, 0.1);
+        border-radius: 8px;
+        padding: 10px;
+        margin-bottom: 8px;
+        border-left: 3px solid transparent;
+    }
+    
+    .history-item.user {
+        border-left-color: #4CAF50;
+    }
+    
+    .history-item.assistant {
+        border-left-color: #2196F3;
+    }
+    
+    .history-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 5px;
+    }
+    
+    .role-icon {
+        font-size: 14px;
+    }
+    
+    .timestamp {
+        font-size: 11px;
+        opacity: 0.7;
+    }
+    
+    .history-content {
+        font-size: 12px;
+        line-height: 1.4;
+        opacity: 0.9;
+    }
+    
+    .no-history {
+        text-align: center;
+        font-style: italic;
+        opacity: 0.7;
+        padding: 20px;
+    }
+    
+    /* Thinking animation */
+    .thinking-message {
+        font-style: italic;
+        color: #888;
+        animation: pulse 1.5s ease-in-out infinite;
+    }
+    
+    @keyframes pulse {
+        0% { opacity: 0.6; }
+        50% { opacity: 1; }
+        100% { opacity: 0.6; }
+    }
+    
+    /* Adjust main content to account for sidebar */
+    .main-container {
+        margin-left: 320px;
+        padding: 20px;
+    }
+    
+    /* Override ChainLit's default styles */
+    .chainlit-prose {
+        margin-left: 320px !important;
+    }
+    
+    /* Responsive design */
+    @media (max-width: 768px) {
+        .sidebar {
+            width: 100%;
+            height: auto;
+            position: relative;
+        }
+        
+        .main-container,
+        .chainlit-prose {
+            margin-left: 0 !important;
+        }
+    }
+    </style>
+    """
 
 async def send_sidebar_update(session_id: str):
-    """Send an update message with sidebar elements"""
+    """Send updated sidebar"""
     await check_api_status()
     
-    sidebar_elements = create_sidebar_elements(session_id)
+    sidebar_html = create_sidebar_html(session_id)
+    css = create_main_layout_css()
     
-    # Send a minimal update message with sidebar elements
+    # Create HTML element with the sidebar
+    sidebar_element = cl.Html(content=css + sidebar_html, name="sidebar")
+    
+    # Send as a message with the sidebar
     await cl.Message(
-        content="📋 *Sidebar updated*",
-        elements=sidebar_elements
+        content="",
+        elements=[sidebar_element]
     ).send()
-
-@cl.on_chat_start
-async def start():
-    """This function is called when a new chat starts."""
-    session_id = cl.user_session.get("id", "default")
-    
-    # Initial status check
-    await check_api_status()
-    
-    # Create sidebar elements
-    sidebar_elements = create_sidebar_elements(session_id)
-    
-    # Send welcome message with sidebar elements
-    await cl.Message(
-        content="Hello! I'm your AI assistant powered by a local LLM API. How can I help you today? 🤖\n\n*Check the sidebar for API status and conversation history.*",
-        elements=sidebar_elements
-    ).send()
-    
-    # Start periodic status checks
-    asyncio.create_task(periodic_status_check())
 
 async def periodic_status_check():
     """Periodically check API status"""
@@ -245,9 +414,29 @@ async def periodic_status_check():
         if api_status.get("status") != old_status:
             logger.info(f"API status changed from {old_status} to {api_status.get('status')}")
 
+@cl.on_chat_start
+async def start():
+    """This function is called when a new chat starts."""
+    session_id = cl.user_session.get("id", "default")
+    
+    # Initial status check
+    await check_api_status()
+    
+    # Create and send initial sidebar
+    await send_sidebar_update(session_id)
+    
+    # Send welcome message
+    await cl.Message(
+        content="Hello! I'm your AI assistant powered by a local LLM API. How can I help you today? 🤖\n\n*Check the sidebar on the left for API status and conversation history.*"
+    ).send()
+    
+    # Start periodic status checks
+    asyncio.create_task(periodic_status_check())
+
+# VERSION 1: Using Steps (More Professional)
 @cl.on_message
-async def main(message: cl.Message):
-    """This function is called every time a user sends a message."""
+async def main_with_steps(message: cl.Message):
+    """Version with thinking steps - rename this to 'main' to use"""
     session_id = cl.user_session.get("id", "default")
     user_message = message.content
     
@@ -257,33 +446,130 @@ async def main(message: cl.Message):
     # Get conversation context for the API
     conversation_context = conv_manager.format_conversation_for_api(session_id)
     
-    # Initialize a new message with empty content for streaming
-    msg = cl.Message(content="")
+    # Show thinking indicator with step
+    async with cl.Step(name="🤔 Thinking...") as step:
+        step.output = "🔍 Processing your message and preparing response..."
+        
+        # Initialize a new message with empty content for streaming
+        msg = cl.Message(content="")
+        full_response = ""
+        
+        try:
+            # Send the prompt and stream the response
+            response_started = False
+            async for text_chunk in stream_from_llm_api(user_message, conversation_context):
+                if not response_started:
+                    # Update step when we start receiving response
+                    step.output = "✨ Generating response..."
+                    response_started = True
+                
+                # Update the message content as chunks arrive
+                full_response += text_chunk
+                await msg.stream_token(text_chunk)
+            
+            # Update step when complete
+            if full_response:
+                step.output = "✅ Response generated successfully!"
+            else:
+                step.output = "⚠️ No response received from API"
+            
+            # Send the final message
+            await msg.send()
+            
+            # Add AI response to conversation history
+            conv_manager.add_message(session_id, "assistant", full_response)
+            
+            # Update sidebar with new conversation
+            await send_sidebar_update(session_id)
+            
+        except Exception as e:
+            # Update step with error and handle the exception
+            step.output = f"❌ Error: {str(e)}"
+            error_message = f"❌ Error processing your message: {str(e)}"
+            await cl.Message(content=error_message).send()
+            logger.error(f"Error in main handler: {e}")
+
+# VERSION 2: Using Typing Message (More Dynamic)
+@cl.on_message
+async def main(message: cl.Message):
+    """Version with typing indicator message"""
+    session_id = cl.user_session.get("id", "default")
+    user_message = message.content
     
-    full_response = ""
+    # Add user message to conversation history
+    conv_manager.add_message(session_id, "user", user_message)
+    
+    # Get conversation context for the API
+    conversation_context = conv_manager.format_conversation_for_api(session_id)
+    
+    # Create thinking message
+    thinking_msg = cl.Message(content="🤔 Thinking...")
+    await thinking_msg.send()
+    
+    # Start thinking animation task
+    thinking_task = asyncio.create_task(animate_thinking(thinking_msg))
     
     try:
+        # Initialize a new message with empty content for streaming
+        msg = cl.Message(content="")
+        full_response = ""
+        
         # Send the prompt and stream the response
+        response_started = False
         async for text_chunk in stream_from_llm_api(user_message, conversation_context):
+            if not response_started:
+                # Cancel thinking animation and update message
+                thinking_task.cancel()
+                await thinking_msg.remove()
+                response_started = True
+            
             # Update the message content as chunks arrive
             full_response += text_chunk
             await msg.stream_token(text_chunk)
         
+        # Send the final message
+        await msg.send()
+        
         # Add AI response to conversation history
         conv_manager.add_message(session_id, "assistant", full_response)
         
-        # Get updated sidebar elements
-        sidebar_elements = create_sidebar_elements(session_id)
-        
-        # Update the message with sidebar elements and send
-        msg.elements = sidebar_elements
-        await msg.send()
+        # Update sidebar with new conversation
+        await send_sidebar_update(session_id)
         
     except Exception as e:
-        # Handle any unexpected errors
+        # Cancel thinking animation and show error
+        thinking_task.cancel()
+        await thinking_msg.remove()
         error_message = f"❌ Error processing your message: {str(e)}"
         await cl.Message(content=error_message).send()
         logger.error(f"Error in main handler: {e}")
+
+async def animate_thinking(thinking_msg: cl.Message):
+    """Animate the thinking message with dots"""
+    try:
+        thinking_states = [
+            "🤔 Thinking",
+            "🤔 Thinking.",
+            "🤔 Thinking..",
+            "🤔 Thinking...",
+            "🧠 Processing",
+            "🧠 Processing.",
+            "🧠 Processing..",
+            "🧠 Processing...",
+            "✨ Generating",
+            "✨ Generating.",
+            "✨ Generating..",
+            "✨ Generating..."
+        ]
+        
+        while True:
+            for state in thinking_states:
+                await thinking_msg.update(content=state)
+                await asyncio.sleep(0.8)
+                
+    except asyncio.CancelledError:
+        # Animation was cancelled (response started)
+        pass
 
 # Optional: Add settings for API configuration
 @cl.on_settings_update
