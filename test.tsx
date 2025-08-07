@@ -1,223 +1,109 @@
-import { useState, useMemo, useCallback, useEffect } from 'react';
-import { AgGridReact } from 'ag-grid-react';
-import Select from 'react-select';
-import { useQuery, useMutation } from '@tanstack/react-query';
+import React, { useCallback, useMemo } from ‘react’;
+import { createEditor, Transforms, Editor, Text, Node } from ‘slate’;
+import { Slate, Editable, withReact } from ‘slate-react’;
+import { Controller } from ‘react-hook-form’;
 
-// Custom cell renderers
-const StatusCellRenderer = (params) => {
-  const isSubmitted = params.context.submittedAppIds.includes(params.data.appId);
-  
-  return (
-    <select
-      className="w-full bg-white dark:bg-gray-800 text-gray-900 dark:text-white px-2 py-1 rounded border border-gray-300 dark:border-gray-600"
-      value={params.value}
-      onChange={(e) => params.context.updateRowData(params.node.id, 'status', e.target.value)}
-      disabled={isSubmitted}
-    >
-      <option value="Approved">Approved</option>
-      <option value="Denied">Denied</option>
-      <option value="Need More Info">Need More Info</option>
-    </select>
-  );
+const CustomTextArea = ({ name, control, rows = 5, rules = {}, …props }) => {
+// Create a Slate editor object that won’t change across renders
+const editor = useMemo(() => withReact(createEditor()), []);
+
+// Initialize empty value
+const initialValue = [
+{
+type: ‘paragraph’,
+children: [{ text: ‘’ }],
+},
+];
+
+// Helper function to serialize Slate value to plain text
+const serialize = (value) => {
+return value
+.map(n => Node.string(n))
+.join(’\n’);
 };
 
-const CommentsCellRenderer = (params) => {
-  const isSubmitted = params.context.submittedAppIds.includes(params.data.appId);
-  
-  return (
-    <textarea
-      className="w-full h-full bg-white dark:bg-gray-800 text-gray-900 dark:text-white px-2 py-1 rounded border border-gray-300 dark:border-gray-600 resize-none"
-      value={params.value || ''}
-      onChange={(e) => params.context.updateRowData(params.node.id, 'comments', e.target.value)}
-      disabled={isSubmitted}
-    />
-  );
+// Helper function to deserialize plain text to Slate value
+const deserialize = (text) => {
+if (!text) return initialValue;
+
+```
+const lines = text.split('\n');
+return lines.map(line => ({
+  type: 'paragraph',
+  children: [{ text: line }],
+}));
+```
+
 };
 
-const SubmitButtonCellRenderer = (params) => {
-  const isSubmitted = params.context.submittedAppIds.includes(params.data.appId);
-  const handleSubmit = () => params.context.handleSubmit(params.data);
+// Custom renderElement function
+const renderElement = useCallback((props) => {
+switch (props.element.type) {
+default:
+return <p {…props.attributes}>{props.children}</p>;
+}
+}, []);
 
-  return (
-    <button
-      className={`px-4 py-2 rounded ${
-        isSubmitted 
-          ? 'bg-gray-300 dark:bg-gray-700 text-gray-500 dark:text-gray-400 cursor-not-allowed'
-          : 'bg-blue-600 hover:bg-blue-700 text-white'
-      } transition-colors`}
-      onClick={handleSubmit}
-      disabled={isSubmitted}
-    >
-      Submit
-    </button>
-  );
-};
+// Custom renderLeaf function
+const renderLeaf = useCallback((props) => {
+return <span {…props.attributes}>{props.children}</span>;
+}, []);
 
-// API functions
-const fetchProducts = async (selectedTags) => {
-  const response = await fetch(`/api/getProducts?selectedTags=${selectedTags.join(',')}`);
-  return response.json();
-};
+// Handle key events for basic functionality
+const handleKeyDown = useCallback((event) => {
+if (event.key === ‘Enter’) {
+event.preventDefault();
+Transforms.insertText(editor, ‘\n’);
+}
+}, [editor]);
 
-const submitData = async ({ appId, status, comments }) => {
-  const response = await fetch('/api/submit', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ appId, status, comments }),
-  });
-  return response.json();
-};
+return (
+<Controller
+name={name}
+control={control}
+rules={rules}
+defaultValue=””
+render={({ field: { onChange, value } }) => {
+// Convert string value to Slate value
+const slateValue = useMemo(() => deserialize(value), [value]);
 
-// Main component
-const ProductsGrid = () => {
-  const [isDarkMode, setIsDarkMode] = useState(false);
-  const [selectedTags, setSelectedTags] = useState(['New']);
-  const [submittedAppIds, setSubmittedAppIds] = useState([]);
-  const [rowData, setRowData] = useState([]);
-
-  // Dark mode toggle
-  useEffect(() => {
-    document.documentElement.classList.toggle('dark', isDarkMode);
-  }, [isDarkMode]);
-
-  // TanStack Query hooks
-  const { isLoading } = useQuery({
-    queryKey: ['products', selectedTags],
-    queryFn: () => fetchProducts(selectedTags),
-    onSuccess: (data) => setRowData(data),
-  });
-
-  const { mutate } = useMutation({
-    mutationFn: submitData,
-    onSuccess: (data) => {
-      setSubmittedAppIds(prev => [...prev, data.appId]);
-    },
-  });
-
-  // Grid configuration
-  const updateRowData = useCallback((rowId, field, value) => {
-    setRowData(prev => prev.map(row => 
-      row.id === rowId ? { ...row, [field]: value } : row
-    ));
-  }, []);
-
-  const handleSubmit = useCallback((rowData) => {
-    mutate(rowData);
-  }, [mutate]);
-
-  const columnDefs = useMemo(() => [
-    { field: 'appId', headerName: 'Application ID', filter: true },
-    { field: 'productName', headerName: 'Product Name', filter: true },
-    { field: 'category', headerName: 'Category', filter: true },
-    { field: 'createdDate', headerName: 'Created Date', filter: true },
-    { 
-      field: 'status', 
-      headerName: 'Status',
-      cellRenderer: StatusCellRenderer,
-      cellRendererParams: { context: {} } // Overridden in gridContext
-    },
-    { 
-      field: 'comments', 
-      headerName: 'Comments',
-      cellRenderer: CommentsCellRenderer,
-      flex: 2
-    },
-    { 
-      headerName: 'Actions',
-      cellRenderer: SubmitButtonCellRenderer,
-      sortable: false,
-      filter: false
-    }
-  ], []);
-
-  const gridContext = useMemo(() => ({
-    submittedAppIds,
-    updateRowData,
-    handleSubmit,
-  }), [submittedAppIds, updateRowData, handleSubmit]);
-
-  // React-select styles
-  const selectStyles = useMemo(() => ({
-    control: (base) => ({
-      ...base,
-      backgroundColor: isDarkMode ? '#1f2937' : '#fff',
-      borderColor: isDarkMode ? '#374151' : '#d1d5db',
-      color: isDarkMode ? '#fff' : '#111827',
-    }),
-    menu: (base) => ({
-      ...base,
-      backgroundColor: isDarkMode ? '#1f2937' : '#fff',
-    }),
-    option: (base, state) => ({
-      ...base,
-      backgroundColor: state.isFocused 
-        ? (isDarkMode ? '#374151' : '#f3f4f6')
-        : 'transparent',
-      color: isDarkMode ? '#fff' : '#111827',
-    }),
-    multiValue: (base) => ({
-      ...base,
-      backgroundColor: isDarkMode ? '#374151' : '#e5e7eb',
-    }),
-    multiValueLabel: (base) => ({
-      ...base,
-      color: isDarkMode ? '#fff' : '#111827',
-    }),
-  }), [isDarkMode]);
-
-  return (
-    <div className="h-screen flex flex-col dark:bg-gray-900">
-      <div className="p-4 flex justify-between items-center bg-gray-100 dark:bg-gray-800">
-        <div className="flex items-center gap-4">
-          <Select
-            isMulti
-            styles={selectStyles}
-            options={[
-              { value: 'Approved', label: 'Approved' },
-              { value: 'Denied', label: 'Denied' },
-              { value: 'New', label: 'New' },
-              { value: 'Need More Info', label: 'Need More Info' },
-            ]}
-            value={selectedTags.map(tag => ({ value: tag, label: tag }))}
-            onChange={selected => setSelectedTags(selected.map(opt => opt.value))}
-            className="w-96"
-            placeholder="Filter status..."
-          />
+```
+    return (
+      <Slate
+        editor={editor}
+        initialValue={slateValue}
+        onChange={(newValue) => {
+          // Only update if the document content has changed
+          const isAstChange = editor.operations.some(
+            op => 'set_selection' !== op.type
+          );
           
-          {isLoading && (
-            <div className="text-gray-600 dark:text-gray-300">
-              Loading...
-            </div>
-          )}
-        </div>
-
-        <button
-          onClick={() => setIsDarkMode(!isDarkMode)}
-          className="px-4 py-2 rounded-lg bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-white hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors"
-        >
-          {isDarkMode ? '🌙 Dark Mode' : '☀️ Light Mode'}
-        </button>
-      </div>
-
-      <div className={`flex-1 px-4 pb-4 ${isDarkMode ? 'ag-theme-alpine-dark' : 'ag-theme-alpine'}`}>
-        <AgGridReact
-          rowData={rowData}
-          columnDefs={columnDefs}
-          context={gridContext}
-          onGridReady={(params) => params.api.sizeColumnsToFit()}
-          className="w-full h-full rounded-lg shadow-lg overflow-hidden"
-          animateRows={true}
-          defaultColDef={{
-            resizable: true,
-            sortable: true,
-            filter: true,
-            flex: 1,
-            minWidth: 150,
+          if (isAstChange) {
+            // Convert Slate value back to plain text
+            const text = serialize(newValue);
+            onChange(text);
+          }
+        }}
+      >
+        <Editable
+          className="block p-2.5 w-full text-sm text-gray-900 bg-gray-50 rounded-lg border border-gray-300 focus:ring-blue-500 focus:border-blue-500 resize-none"
+          style={{ 
+            minHeight: `${rows * 1.5}rem`,
+            outline: 'none'
           }}
+          renderElement={renderElement}
+          renderLeaf={renderLeaf}
+          onKeyDown={handleKeyDown}
+          placeholder="Enter text..."
+          {...props}
         />
-      </div>
-    </div>
-  );
+      </Slate>
+    );
+  }}
+/>
+```
+
+);
 };
 
-export default ProductsGrid;
+export default CustomTextArea;
