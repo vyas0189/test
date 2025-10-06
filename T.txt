@@ -1,71 +1,37 @@
-/* public/custom.css */
+I want to create admin page. This page is for based on the role:
 
-/* Sidebar styling */
-.chat-history-sidebar {
-    background-color: #1e1e1e;
-    border-right: 1px solid #333;
-}
+Here is how the role level: ADMIN or INTAKEREVIEW -> ORG OWNER -> TOWER OWNER -> PRODUCT OWNER
 
-/* Chat history items */
-.chat-history-item {
-    padding: 12px 16px;
-    cursor: pointer;
-    transition: background-color 0.2s;
-    border-radius: 6px;
-    margin: 4px 8px;
-    color: #e0e0e0;
-    font-size: 14px;
-}
+- Admin or INTAKEREVIWER - can create Orgs, can create/update tower, can create/update category, can create/update form fields in the category
 
-.chat-history-item:hover {
-    background-color: #2a2a2a;
-}
+- Org Owner - can Update their Org, can create/update their tower, can create/update their category, can create/update form fields in the category
 
-.chat-history-item.active {
-    background-color: #333;
-}
+- Tower Owner - can update their tower, can create/update category, can create/update form fields in the category
 
-/* New chat button */
-.new-chat-button {
-    width: calc(100% - 16px);
-    margin: 8px;
-    padding: 10px;
-    background-color: #444;
-    color: white;
-    border: none;
-    border-radius: 6px;
-    cursor: pointer;
-    transition: background-color 0.2s;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-}
+- Product Owner - can create/update category, can create/update form fields in the category
 
-.new-chat-button:hover {
-    background-color: #555;
-}
+All these will go through a approval procress before the changes are made
 
-/* Sidebar header */
-.sidebar-header {
-    padding: 16px;
-    border-bottom: 1px solid #333;
-    color: #e0e0e0;
-    font-weight: 500;
-}
 
-/* Main chat area */
-.main-chat-area {
-    background-color: #0a0a0a;
-}
+When creating/updating the Org, Tower or Category:
+- Org will require: Org Name, Org Description, Org Owner (dropdown of Orgs that the user has access to), Secondary Org Owner (dropdown of Orgs that the user has access to). 
 
-/* Message styling */
-.message-container {
-    max-width: 800px;
-    margin: 0 auto;
-}
+- Tower will require: Tower Name, Tower Description, Org (dropdown of Orgs that the user has access to)
 
-/* Input area */
-.input-container {
-    background-color: #1a1a1a;
-    border-top: 1px solid #333;
-}
+- Category will feilds will be based on the type Jira or SNOW, but the common fields will be:
+    - Category Name
+    - Category Description
+    - Category Owner (dropdown of Orgs that the user has access to)
+    - Category Secondary Owner (dropdown of Orgs that the user has access to)
+    - Category Type (Jira or SNOW)
+if the category type is Jira, then the following fields will be required:
+    - Jira Instance (dropdown of Jira instances that the user has access to)
+    - Jira Type (STORY or EPIC)
+    - Jira Project ID
+    - Jira Labels for the category
+if snow then the following fields will be required:
+    - SNOW Idenifier
+    - SNOW Namespace
+    - SNOW assignment group
+
+Currently the form fields are as follows below, I am showing the Jira form fields, but the will apply for SNOW as well. One thing is missing is the order of the fileds, it needs to be implemented. If it Category Type Jira the common_jira is the default. The users cant update theses files expect the SEAL ID makeing it required or not. Additional user can create additional custom form fields apart from the common ones.
