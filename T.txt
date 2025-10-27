@@ -1,1 +1,38 @@
-$apiKey = "key_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"; $endDate = Get-Date; $startDate = $endDate.AddMonths(-4); $startDateEpoch = [int64](Get-Date $startDate -UFormat %s) * 1000; $endDateEpoch = [int64](Get-Date $endDate -UFormat %s) * 1000; $base64Auth = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("${apiKey}:")); $headers = @{ "Authorization" = "Basic $base64Auth"; "Content-Type" = "application/json" }; $allEvents = @(); $currentPage = 1; $pageSize = 1000; do { $body = @{ startDate = $startDateEpoch; endDate = $endDateEpoch; pageSize = $pageSize; page = $currentPage } | ConvertTo-Json; Write-Host "Fetching page $currentPage..."; $response = Invoke-RestMethod -Uri "https://api.cursor.com/teams/filtered-usage-events" -Method Post -Headers $headers -Body $body; $allEvents += $response.usageEvents; $currentPage++; if ($response.pagination.hasNextPage) { Write-Host "Waiting 3 seconds before next request..."; Start-Sleep -Seconds 3 } } while ($response.pagination.hasNextPage); Write-Host "Fetched all $($allEvents.Count) events from $($currentPage - 1) pages"; $allEvents | Export-Csv -Path "cursor_usage_last_4_months.csv" -NoTypeInformation; Write-Host "Exported $($allEvents.Count) usage events to cursor_usage_last_4_months.csv"
+What is one major advantage of combining Knowledge Graphs with LLMs?
+
+✓ Reduces hallucinations by grounding responses in structured facts
+Makes LLMs run faster
+Eliminates the need for training data
+Reduces model size
+
+
+What does RAG stand for in the context of LLMs?
+
+✓ Retrieval-Augmented Generation
+Rapid Answer Generation
+Relational AI Graphs
+Random Access Gateway
+
+
+What is a key limitation of LLMs that Knowledge Graphs can help address?
+
+✓ Lack of factual grounding and up-to-date information
+Inability to understand language
+Poor text generation quality
+Slow processing speed
+
+
+Which format is commonly used to represent Knowledge Graphs?
+
+✓ RDF (Resource Description Framework)
+JSON only
+CSV files
+Plain text documents
+
+
+How can LLMs help with Knowledge Graphs?
+
+✓ Extract entities and relationships from unstructured text
+Replace Knowledge Graphs entirely
+Compress Knowledge Graphs into smaller files
+Visualize graph structures
