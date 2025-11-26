@@ -1,38 +1,122 @@
-What is one major advantage of combining Knowledge Graphs with LLMs?
+Server-Side (FastAPI with ADK)
+pythonfrom fastapi import FastAPI
+from fastapi.responses import StreamingResponse
+from google.adk.runners import Runner
+from google.adk.agents import Agent
+import json
 
-✓ Reduces hallucinations by grounding responses in structured facts
-Makes LLMs run faster
-Eliminates the need for training data
-Reduces model size
+app = FastAPI()
 
+async def stream_agent_response(user_message: str):
+    # Your agent setup
+    agent = Agent(...)
+    runner = Runner(agent=agent, ...)
+    
+    async for event in runner.run_async(user_id="user", session_id="session", new_message=user_message):
+        # ADK events have different types
+        if hasattr(event, 'content') and event.content:
+            for part in event.content.parts:
+                if hasattr(part, 'text') and part.text:
+                    yield f"data: {json.dumps({'type': 'text', 'content': part.text})}\n\n"
+        
+        # Handle tool calls (MCP)
+        if hasattr(event, 'tool_calls'):
+            yield f"data: {json.dumps({'type': 'tool_call', 'data': str(event.tool_calls)})}\n\n"
+    
+    yield "data: [DONE]\n\n"
 
-What does RAG stand for in the context of LLMs?
+@app.post("/chat")
+async def chat(request: ChatRequest):
+    return StreamingResponse(
+        stream_agent_response(request.message),
+        media_type="text/event-stream"
+    )
+Client-Side Parsing
+Python Client
+pythonimport httpx
+import json
 
-✓ Retrieval-Augmented Generation
-Rapid Answer Generation
-Relational AI Graphs
-Random Access Gateway
+async def parse_stream():
+    async with httpx.AsyncClient() as client:
+        async with client.stream("POST", "http://localhost:8000/chat", 
+                                  json={"message": "Hello"}) as response:
+            async for line in response.aiter_lines():
+                if line.startswith("data: "):
+                    data = line[6:]  # Remove "data: " prefix
+                    
+                    if data == "[DONE]":
+                        break
+                    
+                    try:
+                        parsed = json.loads(data)
+                        if parsed["type"] == "text":
+                            print(parsed["content"], end="", flush=True)
+                        elif parsed["type"] == "tool_call":
+                            print(f"\n[Tool Call]: {parsed['data']}")
+                    except json.JSONDecodeError:
+                        continue
+JavaScript/TypeScript Client
+javascriptasync function parseStream() {
+  const response = await fetch('/chat', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message: 'Hello' })
+  });
 
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
 
-What is a key limitation of LLMs that Knowledge Graphs can help address?
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
 
-✓ Lack of factual grounding and up-to-date information
-Inability to understand language
-Poor text generation quality
-Slow processing speed
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n\n');
+    buffer = lines.pop(); // Keep incomplete chunk
 
+    for (const line of lines) {
+      if (line.startsWith('data: ')) {
+        const data = line.slice(6);
+        
+        if (data === '[DONE]') return;
+        
+        try {
+          const parsed = JSON.parse(data);
+          if (parsed.type === 'text') {
+            console.log(parsed.content);
+          } else if (parsed.type === 'tool_call') {
+            console.log('[Tool Call]:', parsed.data);
+          }
+        } catch (e) {
+          // Skip malformed JSON
+        }
+      }
+    }
+  }
+}
+Key ADK Event Types to Handle
+pythonfrom google.genai import types
 
-Which format is commonly used to represent Knowledge Graphs?
+async def stream_with_event_types(runner, user_message):
+    async for event in runner.run_async(...):
+        # Check event author (user, agent, or tool)
+        author = getattr(event, 'author', None)
+        
+        # Text content
+        if event.content and event.content.parts:
+            for part in event.content.parts:
+                if part.text:
+                    yield {"type": "text", "author": author, "content": part.text}
+                elif part.function_call:
+                    yield {"type": "function_call", "name": part.function_call.name}
+                elif part.function_response:
+                    yield {"type": "function_response", "data": part.function_response}
+Tips
 
-✓ RDF (Resource Description Framework)
-JSON only
-CSV files
-Plain text documents
+Buffer incomplete chunks - SSE data can arrive in fragments
+Handle different event types - ADK emits text, tool calls, and tool responses
+Check the author field - Distinguishes between user, agent, and tool events
+Use [DONE] signal - Indicates stream completion
 
-
-How can LLMs help with Knowledge Graphs?
-
-✓ Extract entities and relationships from unstructured text
-Replace Knowledge Graphs entirely
-Compress Knowledge Graphs into smaller files
-Visualize graph structures
+Would you like me to elaborate on any specific part, such as handling specific MCP tool responses or error handling?
