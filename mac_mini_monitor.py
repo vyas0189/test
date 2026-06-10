@@ -143,6 +143,7 @@ def _apple_fetch_cached(url: str, scraper) -> str | None:
     if url not in _apple_page_cache:
         try:
             resp = scraper.get(url, timeout=20)
+            log.info("Apple %s -> HTTP %d (%d bytes)", url, resp.status_code, len(resp.text))
             if resp.status_code == 200:
                 _apple_page_cache[url] = resp.text
         except Exception as e:
@@ -233,7 +234,57 @@ def _collect_all_apple_prices(html: str, source_url: str) -> list[dict]:
             except ValueError:
                 pass
 
-    return [e for e in found if 400 < e["price"] < 5000]
+    # Product grid tiles on the buy page — each tile usually has a price
+    # and a data-part-number / data-product-part attribute with the SKU
+    for tile in soup.select(
+        "[data-part-number], [data-product-part], "
+        ".rf-product-cell, .product-cell, .rf-bfe-cell"
+    ):
+        sku_attr = (
+            tile.get("data-part-number")
+            or tile.get("data-product-part")
+            or ""
+        ).replace("/", "").upper()
+        price_el = tile.select_one(
+            "[data-autom='productPrice'], .rc-prices-currentprice, "
+            ".current-price, .price"
+        )
+        if price_el:
+            m = re.search(r"\$[\d,]+\.?\d*", price_el.get_text())
+            if m:
+                try:
+                    found.append({
+                        "price": float(m.group().replace("$", "").replace(",", "")),
+                        "currency": "USD",
+                        "sku": sku_attr,
+                        "source": "apple_tile_html",
+                        "url": source_url,
+                    })
+                except ValueError:
+                    pass
+
+    # Apple sometimes embeds a JS variable like:
+    # {"partNumber":"MYLT3LLA","price":{"currentPrice":{"amount":599}}}
+    for script in soup.find_all("script"):
+        text = script.string or ""
+        for m in re.finditer(
+            r'"partNumber"\s*:\s*"([A-Z0-9]{10,12})"'
+            r'.*?"amount"\s*:\s*(\d+)',
+            text,
+        ):
+            try:
+                found.append({
+                    "price": float(m.group(2)),
+                    "currency": "USD",
+                    "sku": m.group(1).upper(),
+                    "source": "apple_js_partNumber",
+                    "url": source_url,
+                })
+            except ValueError:
+                pass
+
+    deduped = {(e["price"], e["sku"]): e for e in found if 400 < e["price"] < 5000}
+    return list(deduped.values())
 
 
 def _best_price_match(prices: list[dict], sku: str, expected: float) -> dict | None:
