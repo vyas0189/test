@@ -10,6 +10,7 @@ import logging
 import os
 import re
 import sys
+import urllib.parse
 from datetime import datetime, date
 from pathlib import Path
 
@@ -103,8 +104,10 @@ _catalog_api_prices: list[dict] = []
 _catalog_api_ran: bool = False
 
 # Third-party retailer results — cached after first call
-_walmart_prices: list[dict] = []
-_walmart_ran: bool = False
+_amazon_search_prices: list[dict] = []
+_amazon_search_ran: bool = False
+_macrumors_prices: list[dict] = []
+_macrumors_ran: bool = False
 
 
 def _try_apple_catalog_api(scraper) -> list[dict]:
@@ -289,35 +292,92 @@ def _init_playwright_apple() -> None:
         log.warning("Playwright initialisation failed: %s", e)
 
 
-def _try_walmart_prices(scraper) -> list[dict]:
-    """Search Walmart for Mac mini M4 and extract prices — runs once per session."""
-    url = "https://www.walmart.com/search?q=apple+mac+mini+m4"
+def _try_amazon_search_prices(scraper) -> list[dict]:
+    """
+    Search Amazon by product name for each Mac mini model.
+    Uses search results rather than direct ASIN pages (which 404 for us).
+    """
+    found: list[dict] = []
+    queries = [
+        ("apple mac mini m4 8gb 256gb", "MYLT3LLA"),
+        ("apple mac mini m4 pro 24gb 512gb", "MYM13LLA"),
+    ]
+    for query, sku in queries:
+        url = "https://www.amazon.com/s?k=" + urllib.parse.quote(query) + "&i=electronics&rh=n%3A172282"
+        try:
+            resp = scraper.get(url, timeout=20)
+            log.info("Amazon search [%s] → HTTP %d (%d bytes)", query[:40], resp.status_code, len(resp.text))
+            if resp.status_code != 200:
+                continue
+            html = resp.text
+            if re.search(r"(Type the characters|captcha|robot check)", html, re.I):
+                log.warning("Amazon search CAPTCHA for: %s", query[:40])
+                continue
+            soup = BeautifulSoup(html, "lxml")
+            # Prices appear in <span class="a-price-whole"> or <span class="a-offscreen">
+            for el in soup.select(".a-price .a-offscreen, .a-price-whole"):
+                raw = el.get_text().replace("$", "").replace(",", "").strip()
+                # a-offscreen includes cents: "599.00"; a-price-whole is just "599"
+                try:
+                    price = float(raw)
+                    if 400 < price < 2000:
+                        found.append({
+                            "price": price, "currency": "USD",
+                            "sku": sku, "source": "amazon_search",
+                            "url": url,
+                        })
+                except ValueError:
+                    pass
+            log.info("Amazon search [%s] → %d prices", query[:40],
+                     sum(1 for f in found if f.get("sku") == sku))
+        except Exception as e:
+            log.warning("Amazon search error (%s): %s", query[:40], e)
+    return found
+
+
+def _try_macrumors_prices(scraper) -> list[dict]:
+    """
+    Fetch MacRumors buyer's guide for Mac mini — a content site that aggregates
+    prices from multiple Apple resellers. Less bot-protected than actual retailers.
+    """
+    url = "https://buyersguide.macrumors.com/product/mac-mini/"
     try:
         resp = scraper.get(url, timeout=20)
-        log.info("Walmart %s → HTTP %d (%d bytes)", url, resp.status_code, len(resp.text))
+        log.info("MacRumors %s → HTTP %d (%d bytes)", url, resp.status_code, len(resp.text))
         if resp.status_code != 200:
             return []
         soup = BeautifulSoup(resp.text, "lxml")
         found: list[dict] = []
-        for nd in soup.find_all("script", id="__NEXT_DATA__"):
-            try:
-                _walk_json_for_prices(json.loads(nd.string or ""), found, url)
-            except (json.JSONDecodeError, TypeError):
-                pass
         for ld in soup.find_all("script", type="application/ld+json"):
             try:
                 _walk_json_for_prices(json.loads(ld.string or ""), found, url)
             except (json.JSONDecodeError, TypeError):
                 pass
+        for nd in soup.find_all("script", id="__NEXT_DATA__"):
+            try:
+                _walk_json_for_prices(json.loads(nd.string or ""), found, url)
+            except (json.JSONDecodeError, TypeError):
+                pass
         result = [f for f in found if 400 < f["price"] < 2000]
         if result:
-            log.info("Walmart: %d prices — %s", len(result),
+            log.info("MacRumors: %d prices — %s", len(result),
                      [(f["price"], f.get("sku") or "?") for f in result[:8]])
         else:
-            log.info("Walmart: no prices found in JSON")
+            log.info("MacRumors: no prices in JSON; trying text sweep")
+            for m in re.finditer(r'\$(\d{3,4}(?:\.\d{2})?)\b', resp.text):
+                try:
+                    p = float(m.group(1))
+                    if 400 < p < 2000:
+                        found.append({"price": p, "currency": "USD",
+                                      "sku": "", "source": "macrumors_text", "url": url})
+                except ValueError:
+                    pass
+            result = list({(f["price"], f["sku"]): f for f in found if 400 < f["price"] < 2000}.values())
+            if result:
+                log.info("MacRumors text sweep: %s", [(f["price"],) for f in result[:8]])
         return result
     except Exception as e:
-        log.warning("Walmart error: %s", e)
+        log.warning("MacRumors error: %s", e)
         return []
 
 
@@ -357,7 +417,6 @@ def fetch_apple_price(product: dict, scraper) -> dict | None:
         f"https://www.apple.com/shop/product/{sku_no_slash}",
         f"https://www.apple.com/shop/product/{sku_enc}",
         f"https://www.apple.com/shop/go/product/{sku_no_slash}",
-        f"https://www.apple.com/shop/buy-mac/mac-mini?product={sku_no_slash}",
     ]:
         html = _apple_fetch_cached(url, scraper)
         if html:
@@ -389,15 +448,25 @@ def fetch_apple_price(product: dict, scraper) -> dict | None:
         if result:
             return result
 
-    # Strategy 5: Walmart search (Apple authorized reseller at MSRP)
-    global _walmart_ran, _walmart_prices
-    if not _walmart_ran:
-        _walmart_ran = True
-        _walmart_prices = _try_walmart_prices(scraper)
-    if _walmart_prices:
-        result = _best_price_match(_walmart_prices, product["sku"], expected)
+    # Strategy 5: Amazon product search (search results vs direct ASIN)
+    global _amazon_search_ran, _amazon_search_prices
+    if not _amazon_search_ran:
+        _amazon_search_ran = True
+        _amazon_search_prices = _try_amazon_search_prices(scraper)
+    if _amazon_search_prices:
+        result = _best_price_match(_amazon_search_prices, product["sku"], expected)
         if result:
-            return {**result, "source": "walmart"}
+            return {**result, "source": "amazon_search"}
+
+    # Strategy 6: MacRumors buyer's guide (aggregates Apple reseller prices)
+    global _macrumors_ran, _macrumors_prices
+    if not _macrumors_ran:
+        _macrumors_ran = True
+        _macrumors_prices = _try_macrumors_prices(scraper)
+    if _macrumors_prices:
+        result = _best_price_match(_macrumors_prices, product["sku"], expected)
+        if result:
+            return {**result, "source": "macrumors"}
 
     log.warning("All Apple strategies exhausted for %s", product["name"])
     return None
@@ -587,45 +656,6 @@ def _collect_all_apple_prices(html: str, source_url: str) -> list[dict]:
                 })
             except ValueError:
                 pass
-
-    # Deep script scan: if any <script> block contains our SKUs, try to extract
-    # prices from the surrounding context using a wider set of JSON patterns
-    known_skus = ["MYLT3LLA", "MYLY3LLA", "MYM13LLA"]
-    for script in soup.find_all("script"):
-        text = script.string or ""
-        for sku in known_skus:
-            if sku not in text:
-                continue
-            # Log context to help identify the data format (first occurrence only)
-            idx = text.find(sku)
-            ctx = text[max(0, idx - 80):idx + 200]
-            log.info("SKU %s in script at %s ctx: …%s…", sku, source_url[-50:], ctx[:200])
-            # Try: {"partNumber":"MYLT3LLA",...,"amount":599}  (dot-all via manual split)
-            for chunk in re.split(r'(?<=[}\]])', text):
-                if sku in chunk:
-                    for am in re.findall(r'"amount"\s*:\s*(\d{3,4})', chunk):
-                        try:
-                            price = float(am)
-                            if 400 < price < 5000:
-                                found.append({
-                                    "price": price, "currency": "USD",
-                                    "sku": sku, "source": "apple_js_deep",
-                                    "url": source_url,
-                                })
-                        except ValueError:
-                            pass
-                    # Also try "price":599 or "salePrice":599 near the SKU
-                    for pm in re.findall(r'"(?:price|salePrice|currentPrice|regularPrice)"\s*:\s*(\d{3,4}(?:\.\d+)?)', chunk):
-                        try:
-                            price = float(pm)
-                            if 400 < price < 5000:
-                                found.append({
-                                    "price": price, "currency": "USD",
-                                    "sku": sku, "source": "apple_js_deep",
-                                    "url": source_url,
-                                })
-                        except ValueError:
-                            pass
 
     # Broad sweep: catch any $NNN or $N,NNN price literal in the HTML text
     # (covers aria-labels, hidden spans, and other non-standard elements)
