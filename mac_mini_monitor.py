@@ -299,10 +299,10 @@ def _try_amazon_search_prices(scraper) -> list[dict]:
     """
     found: list[dict] = []
     queries = [
-        ("apple mac mini m4 8gb 256gb", "MYLT3LLA"),
-        ("apple mac mini m4 pro 24gb 512gb", "MYM13LLA"),
+        "apple mac mini m4 8gb 256gb",
+        "apple mac mini m4 pro 24gb 512gb",
     ]
-    for query, sku in queries:
+    for query in queries:
         url = "https://www.amazon.com/s?k=" + urllib.parse.quote(query) + "&i=electronics&rh=n%3A172282"
         try:
             resp = scraper.get(url, timeout=20)
@@ -314,6 +314,7 @@ def _try_amazon_search_prices(scraper) -> list[dict]:
                 log.warning("Amazon search CAPTCHA for: %s", query[:40])
                 continue
             soup = BeautifulSoup(html, "lxml")
+            count_before = len(found)
             # Prices appear in <span class="a-price-whole"> or <span class="a-offscreen">
             for el in soup.select(".a-price .a-offscreen, .a-price-whole"):
                 raw = el.get_text().replace("$", "").replace(",", "").strip()
@@ -321,15 +322,17 @@ def _try_amazon_search_prices(scraper) -> list[dict]:
                 try:
                     price = float(raw)
                     if 400 < price < 2000:
+                        # No SKU assigned — let _best_price_match use tolerance filtering.
+                        # Assigning the query's SKU to all results bypasses tolerance and
+                        # accepts used/refurbished listings at wrong prices.
                         found.append({
                             "price": price, "currency": "USD",
-                            "sku": sku, "source": "amazon_search",
+                            "sku": "", "source": "amazon_search",
                             "url": url,
                         })
                 except ValueError:
                     pass
-            log.info("Amazon search [%s] → %d prices", query[:40],
-                     sum(1 for f in found if f.get("sku") == sku))
+            log.info("Amazon search [%s] → %d prices", query[:40], len(found) - count_before)
         except Exception as e:
             log.warning("Amazon search error (%s): %s", query[:40], e)
     return found
@@ -693,6 +696,7 @@ def _best_price_match(prices: list[dict], sku: str, expected: float) -> dict | N
     1. Exact SKU match (most precise — works when Apple product pages embed SKU in JSON-LD)
     2. Price closest to expected_price within tolerance:
        - Structured sources (JSON-LD, selectors): ±25%
+       - Amazon search results: ±12% (rejects used/refurb at 18%+ off)
        - Broad text sweep: ±5% (avoids nearby unrelated prices being accepted)
     """
     if not prices:
@@ -707,7 +711,12 @@ def _best_price_match(prices: list[dict], sku: str, expected: float) -> dict | N
 
     if expected > 0:
         def _tol(p: dict) -> float:
-            return 0.05 if "text_sweep" in p.get("source", "") else 0.25
+            src = p.get("source", "")
+            if "text_sweep" in src:
+                return 0.05   # very tight: page text can include any incidental price
+            if "amazon_search" in src:
+                return 0.12   # moderate: rejects used/refurb (18%+ off) while allowing real deals
+            return 0.25
 
         valid = [p for p in prices if abs(p["price"] - expected) / expected <= _tol(p)]
         if not valid:
