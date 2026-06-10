@@ -58,6 +58,10 @@ jobs:
         if: steps.gate.outputs.skip != 'true'
         run: pip install -r requirements.txt
 
+      - name: Install Playwright Chromium
+        if: steps.gate.outputs.skip != 'true'
+        run: playwright install --with-deps chromium
+
       # -----------------------------------------------------------------------
       # 4. Run the price monitor
       # -----------------------------------------------------------------------

@@ -94,18 +94,127 @@ def make_scraper():
 # Shared page cache — buy page is fetched once and reused for all products
 _apple_page_cache: dict[str, str] = {}
 
+# Playwright results — populated once per run, keyed by clean SKU (no slashes)
+_playwright_apple_prices: dict[str, dict] = {}
+_playwright_ran: bool = False
+
+
+def _init_playwright_apple() -> None:
+    """Launch headless Chromium once, load Apple's buy page, extract all product prices."""
+    global _playwright_ran
+    if _playwright_ran:
+        return
+    _playwright_ran = True
+
+    try:
+        from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
+    except ImportError:
+        log.warning("playwright not installed — skipping browser-based Apple fetch")
+        return
+
+    url = "https://www.apple.com/shop/buy-mac/mac-mini"
+    try:
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(headless=True)
+            ctx = browser.new_context(
+                user_agent=(
+                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/124.0.0.0 Safari/537.36"
+                ),
+                locale="en-US",
+                extra_http_headers={"Accept-Language": "en-US,en;q=0.9"},
+            )
+            page = ctx.new_page()
+            log.info("Playwright: loading %s", url)
+            page.goto(url, wait_until="load", timeout=30000)
+
+            # Wait up to 15 s for Apple's product tiles to render
+            try:
+                page.wait_for_selector("[data-part-number]", timeout=15000)
+            except PWTimeout:
+                log.warning("Playwright: product tiles did not appear; extracting whatever is present")
+
+            # Extract SKU + price from every rendered product tile
+            raw = page.evaluate("""
+                () => {
+                    const out = [];
+                    document.querySelectorAll('[data-part-number]').forEach(el => {
+                        const sku = (el.getAttribute('data-part-number') || '').replace(/\\//g, '').toUpperCase();
+                        const priceEl = el.querySelector(
+                            '[data-autom="productPrice"], .rc-prices-currentprice, ' +
+                            '.current-price, .price'
+                        );
+                        out.push({sku, priceText: priceEl ? priceEl.textContent : ''});
+                    });
+                    return out;
+                }
+            """)
+            log.info("Playwright: %d product tiles found", len(raw))
+            for item in raw:
+                m = re.search(r"[\d,]+\.?\d*", (item.get("priceText") or "").replace("$", ""))
+                if m and item.get("sku"):
+                    try:
+                        price = float(m.group().replace(",", ""))
+                        if 400 < price < 5000:
+                            _playwright_apple_prices[item["sku"]] = {
+                                "price": price, "currency": "USD",
+                                "source": "apple_playwright", "url": url,
+                            }
+                            log.info("Playwright: %s → $%.2f", item["sku"], price)
+                    except ValueError:
+                        pass
+
+            # Fallback: try to pull pricing from JS state objects embedded in the page
+            if not _playwright_apple_prices:
+                log.info("Playwright: no tiles; scanning JS window state")
+                for var in ("__STORE_DATA__", "REDUX_STATE", "APP_STATE", "pageLite"):
+                    try:
+                        blob = page.evaluate(f"() => JSON.stringify(window['{var}'] || null)")
+                        if blob and blob != "null":
+                            data = json.loads(blob)
+                            walker_found: list[dict] = []
+                            _walk_json_for_prices(data, walker_found, url)
+                            for it in walker_found:
+                                if it["sku"]:
+                                    _playwright_apple_prices[it["sku"]] = it
+                            if walker_found:
+                                log.info("Playwright: window.%s → %d prices", var, len(walker_found))
+                                break
+                    except Exception:
+                        pass
+
+            # Last resort: get the fully-rendered HTML and run static parsers on it
+            if not _playwright_apple_prices:
+                log.info("Playwright: falling back to rendered HTML parsing")
+                rendered_html = page.content()
+                _apple_page_cache[url] = rendered_html  # update cache with JS-rendered version
+
+            browser.close()
+    except Exception as e:
+        log.warning("Playwright initialisation failed: %s", e)
+
 
 def fetch_apple_price(product: dict, scraper) -> dict | None:
     """
-    Per-product price lookup with three strategies:
-    1. Individual SKU product pages (most precise)
-    2. Shared buy-mac/mac-mini listing page (cached; matched by expected price)
-    3. Mac mini overview page (last resort)
-    All strategies collect every price on the page then pick the best match.
+    Per-product price lookup — four strategies in priority order:
+    0. Playwright headless Chromium (fully-rendered JS page — most accurate)
+    1. Individual SKU product pages
+    2. Shared buy-mac/mac-mini listing page (static HTML; only default model in JSON-LD)
+    3. Mac mini compare page
+    4. Overview page
     """
     sku_no_slash = product["sku"].replace("/", "")
     sku_enc = product["sku"].replace("/", "%2F")
     expected = product.get("expected_price", 0.0)
+
+    # Strategy 0: Playwright — runs once, results shared across all products
+    _init_playwright_apple()
+    sku_clean = product["sku"].replace("/", "").upper()
+    if sku_clean in _playwright_apple_prices:
+        r = _playwright_apple_prices[sku_clean]
+        return {"price": r["price"], "currency": r["currency"],
+                "source": r["source"], "url": r["url"]}
 
     # Strategy 1: individual product pages
     for url in [
@@ -127,7 +236,7 @@ def fetch_apple_price(product: dict, scraper) -> dict | None:
         if result:
             return result
 
-    # Strategy 3: Mac mini compare page (table layout, often simpler HTML with all configs)
+    # Strategy 3: Mac mini compare page
     compare_url = "https://www.apple.com/mac-mini/compare/"
     html = _apple_fetch_cached(compare_url, scraper)
     if html:
