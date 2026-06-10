@@ -295,7 +295,7 @@ def _try_bestbuy_prices(scraper) -> list[dict]:
     """Search Best Buy for Mac mini M4 and extract prices — runs once per session."""
     url = "https://www.bestbuy.com/site/searchpage.jsp?st=mac+mini+m4"
     try:
-        resp = scraper.get(url, timeout=20)
+        resp = scraper.get(url, timeout=30)
         log.info("Best Buy %s → HTTP %d (%d bytes)", url, resp.status_code, len(resp.text))
         if resp.status_code != 200:
             return []
@@ -327,7 +327,7 @@ def _try_bhphoto_prices(scraper) -> list[dict]:
     """Search B&H Photo for each Mac mini SKU and extract prices — runs once per session."""
     found: list[dict] = []
     for sku_q in ["MYLT3LLA", "MYLY3LLA", "MYM13LLA"]:
-        url = f"https://www.bhphotovideo.com/c/search?q={sku_q}&sto=1&ci=1003"
+        url = f"https://www.bhphotovideo.com/c/search?q={sku_q}"
         try:
             resp = scraper.get(url, timeout=20)
             log.info("B&H Photo %s → HTTP %d (%d bytes)", url, resp.status_code, len(resp.text))
@@ -387,11 +387,12 @@ def fetch_apple_price(product: dict, scraper) -> dict | None:
         if result:
             return result
 
-    # Strategy 1: individual product pages
+    # Strategy 1: individual product pages (Apple SKU-specific URLs)
     for url in [
         f"https://www.apple.com/shop/product/{sku_no_slash}",
         f"https://www.apple.com/shop/product/{sku_enc}",
         f"https://www.apple.com/shop/go/product/{sku_no_slash}",
+        f"https://www.apple.com/shop/buy-mac/mac-mini?product={sku_no_slash}",
     ]:
         html = _apple_fetch_cached(url, scraper)
         if html:
@@ -666,7 +667,9 @@ def _best_price_match(prices: list[dict], sku: str, expected: float) -> dict | N
     """
     Pick the most relevant price from a candidate list:
     1. Exact SKU match (most precise — works when Apple product pages embed SKU in JSON-LD)
-    2. Price closest to expected_price within 25% tolerance (buy-page fallback)
+    2. Price closest to expected_price within tolerance:
+       - Structured sources (JSON-LD, selectors): ±25%
+       - Broad text sweep: ±5% (avoids nearby unrelated prices being accepted)
     """
     if not prices:
         return None
@@ -679,8 +682,14 @@ def _best_price_match(prices: list[dict], sku: str, expected: float) -> dict | N
                     "source": p["source"], "url": p["url"]}
 
     if expected > 0:
-        best = min(prices, key=lambda x: abs(x["price"] - expected))
-        if abs(best["price"] - expected) / expected <= 0.25:
+        def _tol(p: dict) -> float:
+            return 0.05 if "text_sweep" in p.get("source", "") else 0.25
+
+        valid = [p for p in prices if abs(p["price"] - expected) / expected <= _tol(p)]
+        if not valid:
+            return None
+        best = min(valid, key=lambda x: abs(x["price"] - expected))
+        if abs(best["price"] - expected) / expected <= _tol(best):
             return {"price": best["price"], "currency": best["currency"],
                     "source": best["source"], "url": best["url"]}
 
