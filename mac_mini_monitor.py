@@ -542,7 +542,17 @@ def _collect_all_apple_prices(html: str, source_url: str) -> list[dict]:
                 pass
 
     deduped = {(e["price"], e["sku"]): e for e in found if 400 < e["price"] < 5000}
-    return list(deduped.values())
+    result = list(deduped.values())
+    page_tag = source_url.split("/")[-1][:40] or source_url[-40:]
+    if result:
+        summary = ", ".join(
+            f"${p['price']:.0f}[{p['sku'] or '?'}]({p['source'].replace('apple_','')})"
+            for p in result[:15]
+        )
+        log.info("  parse %s → %s", page_tag, summary)
+    else:
+        log.info("  parse %s → (no prices found)", page_tag)
+    return result
 
 
 def _best_price_match(prices: list[dict], sku: str, expected: float) -> dict | None:
