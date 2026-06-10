@@ -91,120 +91,172 @@ def make_scraper():
 # Apple Store
 # ---------------------------------------------------------------------------
 
+# Shared page cache — buy page is fetched once and reused for all products
+_apple_page_cache: dict[str, str] = {}
+
+
 def fetch_apple_price(product: dict, scraper) -> dict | None:
     """
-    Tries three Apple endpoints in order:
-    1. Per-SKU shop product page (JSON-LD + HTML fallback)
-    2. The Mac mini overview page (structured data / "From $X" text)
-    3. Apple's product feed XML
+    Per-product price lookup with three strategies:
+    1. Individual SKU product pages (most precise)
+    2. Shared buy-mac/mac-mini listing page (cached; matched by expected price)
+    3. Mac mini overview page (last resort)
+    All strategies collect every price on the page then pick the best match.
     """
+    sku_no_slash = product["sku"].replace("/", "")
     sku_enc = product["sku"].replace("/", "%2F")
+    expected = product.get("expected_price", 0.0)
 
-    # --- Strategy 1: /shop/product/<SKU> ---
+    # Strategy 1: individual product pages
     for url in [
+        f"https://www.apple.com/shop/product/{sku_no_slash}",
         f"https://www.apple.com/shop/product/{sku_enc}",
-        f"https://www.apple.com/shop/go/product/{product['sku'].replace('/', '')}",
+        f"https://www.apple.com/shop/go/product/{sku_no_slash}",
     ]:
-        try:
-            resp = scraper.get(url, timeout=20)
-            if resp.status_code == 200:
-                result = _parse_apple_page(resp.text, url)
-                if result:
-                    return result
-        except Exception as e:
-            log.debug("Apple SKU fetch error (%s): %s", url, e)
-
-    # --- Strategy 2: Mac mini overview page ---
-    try:
-        resp = scraper.get("https://www.apple.com/mac-mini/", timeout=20)
-        if resp.status_code == 200:
-            result = _parse_apple_page(resp.text, "https://www.apple.com/mac-mini/")
+        html = _apple_fetch_cached(url, scraper)
+        if html:
+            result = _best_price_match(_collect_all_apple_prices(html, url), product["sku"], expected)
             if result:
                 return result
-    except Exception as e:
-        log.debug("Apple overview fetch error: %s", e)
 
-    # --- Strategy 3: Apple shop buy-mac/mac-mini page ---
-    try:
-        resp = scraper.get("https://www.apple.com/shop/buy-mac/mac-mini", timeout=20)
-        if resp.status_code == 200:
-            result = _parse_apple_page(resp.text, "https://www.apple.com/shop/buy-mac/mac-mini")
-            if result:
-                return result
-    except Exception as e:
-        log.debug("Apple buy page fetch error: %s", e)
+    # Strategy 2: shared buy page (fetched once for all three products)
+    buy_url = "https://www.apple.com/shop/buy-mac/mac-mini"
+    html = _apple_fetch_cached(buy_url, scraper)
+    if html:
+        result = _best_price_match(_collect_all_apple_prices(html, buy_url), product["sku"], expected)
+        if result:
+            return result
 
-    log.warning("All Apple strategies failed for %s", product["name"])
+    # Strategy 3: overview page
+    overview_url = "https://www.apple.com/mac-mini/"
+    html = _apple_fetch_cached(overview_url, scraper)
+    if html:
+        result = _best_price_match(_collect_all_apple_prices(html, overview_url), product["sku"], expected)
+        if result:
+            return result
+
+    log.warning("All Apple strategies exhausted for %s", product["name"])
     return None
 
 
-def _parse_apple_page(html: str, source_url: str) -> dict | None:
+def _apple_fetch_cached(url: str, scraper) -> str | None:
+    if url not in _apple_page_cache:
+        try:
+            resp = scraper.get(url, timeout=20)
+            if resp.status_code == 200:
+                _apple_page_cache[url] = resp.text
+        except Exception as e:
+            log.debug("Apple fetch error (%s): %s", url, e)
+    return _apple_page_cache.get(url)
+
+
+def _collect_all_apple_prices(html: str, source_url: str) -> list[dict]:
+    """Extract every distinct price from an Apple page, each tagged with its SKU."""
+    found = []
     soup = BeautifulSoup(html, "lxml")
 
-    # JSON-LD structured data
+    # JSON-LD — walk every item and every offer in that item
     for script in soup.find_all("script", type="application/ld+json"):
         try:
-            data = json.loads(script.string or "")
-            if isinstance(data, list):
-                data = data[0]
-            offers = data.get("offers", {})
-            if isinstance(offers, list):
-                offers = offers[0]
-            price_raw = offers.get("price") or offers.get("lowPrice")
-            if price_raw:
-                return {
-                    "price": float(str(price_raw).replace(",", "")),
-                    "currency": offers.get("priceCurrency", "USD"),
-                    "source": "apple_ld_json",
-                    "url": source_url,
-                }
-        except (json.JSONDecodeError, KeyError, ValueError, TypeError):
+            raw = json.loads(script.string or "")
+            items = raw if isinstance(raw, list) else [raw]
+            for item in items:
+                item_sku = (item.get("sku") or "").replace("/", "").upper()
+                offers = item.get("offers", {})
+                price_entries = offers if isinstance(offers, list) else [offers]
+                for offer in price_entries:
+                    p = offer.get("price") or offer.get("lowPrice")
+                    if not p:
+                        continue
+                    try:
+                        found.append({
+                            "price": float(str(p).replace(",", "")),
+                            "currency": offer.get("priceCurrency", "USD"),
+                            "sku": item_sku,
+                            "source": "apple_ld_json",
+                            "url": source_url,
+                        })
+                    except ValueError:
+                        pass
+        except (json.JSONDecodeError, TypeError):
             pass
 
-    # Inline JSON state blobs (Next.js / app state)
+    # Inline JS blobs — grab every numeric price near "mac mini"
     for script in soup.find_all("script"):
         text = script.string or ""
         if "mac mini" in text.lower() and '"price"' in text:
-            m = re.search(r'"price"\s*:\s*"?\$?([\d,]+\.?\d*)"?', text)
-            if m:
-                return {
-                    "price": float(m.group(1).replace(",", "")),
-                    "currency": "USD",
-                    "source": "apple_inline_json",
-                    "url": source_url,
-                }
+            for m in re.finditer(r'"price"\s*:\s*"?\$?([\d,]+\.?\d*)"?', text):
+                try:
+                    found.append({
+                        "price": float(m.group(1).replace(",", "")),
+                        "currency": "USD",
+                        "sku": "",
+                        "source": "apple_inline_json",
+                        "url": source_url,
+                    })
+                except ValueError:
+                    pass
 
-    # Visible price elements
+    # Visible price elements — collect all, not just first
     for sel in [
         "[data-autom='productPrice']",
         ".rc-prices-currentprice",
         ".current-price",
         ".product-price .current_price",
-        ".price",
     ]:
-        el = soup.select_one(sel)
-        if el:
+        for el in soup.select(sel):
             m = re.search(r"\$[\d,]+\.?\d*", el.get_text())
             if m:
-                return {
-                    "price": float(m.group().replace("$", "").replace(",", "")),
-                    "currency": "USD",
-                    "source": "apple_html_selector",
-                    "url": source_url,
-                }
+                try:
+                    found.append({
+                        "price": float(m.group().replace("$", "").replace(",", "")),
+                        "currency": "USD",
+                        "sku": "",
+                        "source": "apple_html_selector",
+                        "url": source_url,
+                    })
+                except ValueError:
+                    pass
 
-    # "From $X" text anywhere on page
+    # "From $X" text
     for tag in soup.find_all(string=re.compile(r"From\s*\$[\d,]+")):
         m = re.search(r"\$[\d,]+\.?\d*", tag)
         if m:
-            price = float(m.group().replace("$", "").replace(",", ""))
-            if 400 < price < 5000:  # sanity range for Mac mini
-                return {
-                    "price": price,
+            try:
+                found.append({
+                    "price": float(m.group().replace("$", "").replace(",", "")),
                     "currency": "USD",
+                    "sku": "",
                     "source": "apple_from_text",
                     "url": source_url,
-                }
+                })
+            except ValueError:
+                pass
+
+    return [e for e in found if 400 < e["price"] < 5000]
+
+
+def _best_price_match(prices: list[dict], sku: str, expected: float) -> dict | None:
+    """
+    Pick the most relevant price from a candidate list:
+    1. Exact SKU match (most precise — works when Apple product pages embed SKU in JSON-LD)
+    2. Price closest to expected_price within 25% tolerance (buy-page fallback)
+    """
+    if not prices:
+        return None
+
+    sku_clean = sku.replace("/", "").upper()
+
+    for p in prices:
+        if p["sku"] == sku_clean:
+            return {"price": p["price"], "currency": p["currency"],
+                    "source": p["source"], "url": p["url"]}
+
+    if expected > 0:
+        best = min(prices, key=lambda x: abs(x["price"] - expected))
+        if abs(best["price"] - expected) / expected <= 0.25:
+            return {"price": best["price"], "currency": best["currency"],
+                    "source": best["source"], "url": best["url"]}
 
     return None
 
