@@ -12,3 +12,22 @@
 2026-06-10 16:43:19,901 [INFO] History saved to /home/user/test/price_history.json
 2026-06-10 16:43:19,901 [INFO] --- Current prices ---
 2026-06-10 16:43:19,901 [INFO] Monitoring continues for 20 more day(s) (until 2026-06-30).
+2026-06-10 16:50:29,648 [INFO] === Mac mini price check — 2026-06-10 ===
+2026-06-10 16:50:29,674 [INFO] Checking Mac mini M4 8GB/256GB …
+2026-06-10 16:50:31,099 [INFO]   $799.00  (source: apple_ld_json)
+2026-06-10 16:50:31,099 [INFO] Checking Mac mini M4 16GB/256GB …
+2026-06-10 16:50:32,372 [INFO]   $799.00  (source: apple_ld_json)
+2026-06-10 16:50:32,372 [INFO] Checking Mac mini M4 Pro 24GB/512GB …
+2026-06-10 16:50:33,447 [INFO]   $799.00  (source: apple_ld_json)
+2026-06-10 16:50:33,447 [INFO] Checking Mac mini M4 8GB/256GB (Amazon) …
+2026-06-10 16:50:33,597 [WARNING] Amazon returned 404 for Mac mini M4 8GB/256GB (Amazon)
+2026-06-10 16:50:33,597 [WARNING]   No price obtained for Mac mini M4 8GB/256GB (Amazon)
+2026-06-10 16:50:33,597 [INFO] Checking Mac mini M4 Pro 24GB/512GB (Amazon) …
+2026-06-10 16:50:33,696 [WARNING] Amazon returned 404 for Mac mini M4 Pro 24GB/512GB (Amazon)
+2026-06-10 16:50:33,697 [WARNING]   No price obtained for Mac mini M4 Pro 24GB/512GB (Amazon)
+2026-06-10 16:50:33,697 [INFO] Price history saved to /home/runner/work/test/test/price_history.json
+2026-06-10 16:50:33,697 [INFO] --- Latest prices ---
+2026-06-10 16:50:33,697 [INFO]   Mac mini M4 8GB/256GB                         $799.00    (2026-06-10T16:50:31Z)
+2026-06-10 16:50:33,697 [INFO]   Mac mini M4 16GB/256GB                        $799.00    (2026-06-10T16:50:32Z)
+2026-06-10 16:50:33,697 [INFO]   Mac mini M4 Pro 24GB/512GB                    $799.00    (2026-06-10T16:50:33Z)
+2026-06-10 16:50:33,697 [INFO] Monitoring active for 20 more day(s) (ends 2026-06-30).

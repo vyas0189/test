@@ -1,1 +1,29 @@
-{}
+{
+  "Mac mini M4 8GB/256GB": [
+    {
+      "timestamp": "2026-06-10T16:50:31Z",
+      "price": 799.0,
+      "currency": "USD",
+      "source": "apple_ld_json",
+      "url": "https://www.apple.com/shop/buy-mac/mac-mini"
+    }
+  ],
+  "Mac mini M4 16GB/256GB": [
+    {
+      "timestamp": "2026-06-10T16:50:32Z",
+      "price": 799.0,
+      "currency": "USD",
+      "source": "apple_ld_json",
+      "url": "https://www.apple.com/shop/buy-mac/mac-mini"
+    }
+  ],
+  "Mac mini M4 Pro 24GB/512GB": [
+    {
+      "timestamp": "2026-06-10T16:50:33Z",
+      "price": 799.0,
+      "currency": "USD",
+      "source": "apple_ld_json",
+      "url": "https://www.apple.com/shop/buy-mac/mac-mini"
+    }
+  ]
+}
