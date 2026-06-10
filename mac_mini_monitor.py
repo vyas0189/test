@@ -98,9 +98,44 @@ _apple_page_cache: dict[str, str] = {}
 _playwright_apple_prices: dict[str, dict] = {}
 _playwright_ran: bool = False
 
+# Catalog API results — cached after first call
+_catalog_api_prices: list[dict] = []
+_catalog_api_ran: bool = False
+
+
+def _try_apple_catalog_api(scraper) -> list[dict]:
+    """Call Apple's undocumented store catalog/search APIs that return JSON product data."""
+    endpoints = [
+        # Catalog search — returns all Mac mini SKUs with prices
+        (
+            "https://www.apple.com/shop/catalog/search"
+            "?q=mac%20mini&pg=1&si=1&sb=bestsellers&so=descending&os=productselect",
+            {},
+        ),
+        # Per-product us-hed catalog endpoints
+        ("https://www.apple.com/us-hed/shop/catalog/product/MYLT3LLA", {}),
+        ("https://www.apple.com/us-hed/shop/catalog/product/MYLY3LLA", {}),
+        ("https://www.apple.com/us-hed/shop/catalog/product/MYM13LLA", {}),
+    ]
+    found: list[dict] = []
+    for url, extra_headers in endpoints:
+        try:
+            hdrs = {**scraper.headers, "Accept": "application/json", **extra_headers}
+            resp = scraper.get(url, headers=hdrs, timeout=10)
+            log.info("Apple catalog API %s → HTTP %d", url, resp.status_code)
+            if resp.status_code == 200:
+                ct = resp.headers.get("content-type", "")
+                if "json" in ct:
+                    _walk_json_for_prices(resp.json(), found, url)
+                    if found:
+                        log.info("Apple catalog API → %d price entries", len(found))
+        except Exception as e:
+            log.debug("Apple catalog API error (%s): %s", url, e)
+    return found
+
 
 def _init_playwright_apple() -> None:
-    """Launch headless Chromium once, load Apple's buy page, extract all product prices."""
+    """Launch headless Chromium once, intercept JSON API calls, and extract per-model prices."""
     global _playwright_ran
     if _playwright_ran:
         return
@@ -127,47 +162,103 @@ def _init_playwright_apple() -> None:
             )
             page = ctx.new_page()
             log.info("Playwright: loading %s", url)
-            page.goto(url, wait_until="load", timeout=30000)
 
-            # Wait up to 15 s for Apple's product tiles to render
+            # ----------------------------------------------------------------
+            # Intercept every JSON response the page triggers (XHR/fetch)
+            # Apple's buy page fetches product data from internal APIs; we
+            # capture those responses and walk them for SKU+price pairs.
+            # ----------------------------------------------------------------
+            api_prices: list[dict] = []
+
+            def capture_response(response):
+                try:
+                    ct = response.headers.get("content-type", "")
+                    if "json" not in ct:
+                        return
+                    data = response.json()
+                    walker: list[dict] = []
+                    _walk_json_for_prices(data, walker, response.url)
+                    for it in walker:
+                        if it.get("sku") and 400 < it["price"] < 5000:
+                            api_prices.append(it)
+                            log.info(
+                                "Playwright XHR: %s → $%.2f  (from %s)",
+                                it["sku"], it["price"], response.url,
+                            )
+                except Exception:
+                    pass
+
+            page.on("response", capture_response)
+
             try:
-                page.wait_for_selector("[data-part-number]", timeout=15000)
+                page.goto(url, wait_until="domcontentloaded", timeout=30000)
             except PWTimeout:
-                log.warning("Playwright: product tiles did not appear; extracting whatever is present")
+                log.warning("Playwright: domcontentloaded timeout")
 
-            # Extract SKU + price from every rendered product tile
-            raw = page.evaluate("""
-                () => {
-                    const out = [];
-                    document.querySelectorAll('[data-part-number]').forEach(el => {
-                        const sku = (el.getAttribute('data-part-number') || '').replace(/\\//g, '').toUpperCase();
-                        const priceEl = el.querySelector(
-                            '[data-autom="productPrice"], .rc-prices-currentprice, ' +
-                            '.current-price, .price'
-                        );
-                        out.push({sku, priceText: priceEl ? priceEl.textContent : ''});
-                    });
-                    return out;
-                }
-            """)
-            log.info("Playwright: %d product tiles found", len(raw))
-            for item in raw:
-                m = re.search(r"[\d,]+\.?\d*", (item.get("priceText") or "").replace("$", ""))
-                if m and item.get("sku"):
-                    try:
-                        price = float(m.group().replace(",", ""))
-                        if 400 < price < 5000:
-                            _playwright_apple_prices[item["sku"]] = {
-                                "price": price, "currency": "USD",
-                                "source": "apple_playwright", "url": url,
-                            }
-                            log.info("Playwright: %s → $%.2f", item["sku"], price)
-                    except ValueError:
-                        pass
+            # Scroll to trigger lazy-loading, then wait for XHR to settle
+            try:
+                page.evaluate("window.scrollTo(0, 400)")
+                page.wait_for_timeout(3000)
+                page.evaluate("window.scrollTo(0, 900)")
+                page.wait_for_timeout(5000)
+            except Exception:
+                pass
 
-            # Fallback: try to pull pricing from JS state objects embedded in the page
+            log.info("Playwright: %d XHR price entries captured", len(api_prices))
+            for it in api_prices:
+                _playwright_apple_prices[it["sku"]] = it
+
+            # ----------------------------------------------------------------
+            # DOM extraction — works if Apple renders product tiles
+            # ----------------------------------------------------------------
+            try:
+                raw = page.evaluate("""
+                    () => {
+                        const out = [];
+                        const selectors = [
+                            '[data-part-number]',
+                            '[data-autom="productTile"]',
+                            '.rf-product-cell',
+                            '.product-cell',
+                        ];
+                        for (const sel of selectors) {
+                            document.querySelectorAll(sel).forEach(el => {
+                                const sku = (
+                                    el.getAttribute('data-part-number') ||
+                                    el.getAttribute('data-autom-part-number') || ''
+                                ).replace(/\//g, '').toUpperCase();
+                                const priceEl = el.querySelector(
+                                    '[data-autom="productPrice"], .rc-prices-currentprice,' +
+                                    '.current-price, .price'
+                                );
+                                if (priceEl) out.push({sku, priceText: priceEl.textContent});
+                            });
+                        }
+                        return out;
+                    }
+                """)
+                log.info("Playwright: %d product tiles in DOM", len(raw))
+                for item in raw:
+                    m = re.search(r"[\d,]+\.?\d*", (item.get("priceText") or "").replace("$", ""))
+                    if m and item.get("sku"):
+                        try:
+                            price = float(m.group().replace(",", ""))
+                            if 400 < price < 5000:
+                                _playwright_apple_prices[item["sku"]] = {
+                                    "price": price, "currency": "USD",
+                                    "source": "apple_playwright", "url": url,
+                                }
+                                log.info("Playwright DOM: %s → $%.2f", item["sku"], price)
+                        except ValueError:
+                            pass
+            except Exception as e:
+                log.warning("Playwright DOM eval failed: %s", e)
+
+            # ----------------------------------------------------------------
+            # JS window state scan (last resort before rendered-HTML fallback)
+            # ----------------------------------------------------------------
             if not _playwright_apple_prices:
-                log.info("Playwright: no tiles; scanning JS window state")
+                log.info("Playwright: scanning JS window state objects")
                 for var in ("__STORE_DATA__", "REDUX_STATE", "APP_STATE", "pageLite"):
                     try:
                         blob = page.evaluate(f"() => JSON.stringify(window['{var}'] || null)")
@@ -179,16 +270,15 @@ def _init_playwright_apple() -> None:
                                 if it["sku"]:
                                     _playwright_apple_prices[it["sku"]] = it
                             if walker_found:
-                                log.info("Playwright: window.%s → %d prices", var, len(walker_found))
+                                log.info("Playwright window.%s → %d prices", var, len(walker_found))
                                 break
                     except Exception:
                         pass
 
-            # Last resort: get the fully-rendered HTML and run static parsers on it
-            if not _playwright_apple_prices:
-                log.info("Playwright: falling back to rendered HTML parsing")
-                rendered_html = page.content()
-                _apple_page_cache[url] = rendered_html  # update cache with JS-rendered version
+            # Update the static HTML cache with the fully-rendered page so
+            # static strategies can parse richer content
+            rendered_html = page.content()
+            _apple_page_cache[url] = rendered_html
 
             browser.close()
     except Exception as e:
@@ -215,6 +305,16 @@ def fetch_apple_price(product: dict, scraper) -> dict | None:
         r = _playwright_apple_prices[sku_clean]
         return {"price": r["price"], "currency": r["currency"],
                 "source": r["source"], "url": r["url"]}
+
+    # Strategy 0b: Apple's store catalog / search JSON APIs (called once per run)
+    global _catalog_api_ran, _catalog_api_prices
+    if not _catalog_api_ran:
+        _catalog_api_ran = True
+        _catalog_api_prices = _try_apple_catalog_api(scraper)
+    if _catalog_api_prices:
+        result = _best_price_match(_catalog_api_prices, product["sku"], expected)
+        if result:
+            return result
 
     # Strategy 1: individual product pages
     for url in [
