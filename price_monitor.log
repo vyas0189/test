@@ -1,0 +1,14 @@
+2026-06-10 16:43:19,555 [INFO] === Mac mini price check — 2026-06-10 ===
+2026-06-10 16:43:19,555 [INFO] Checking Mac mini M4 (8GB/256GB) on apple …
+2026-06-10 16:43:19,686 [WARNING]   No price returned for Mac mini M4 (8GB/256GB)
+2026-06-10 16:43:19,686 [INFO] Checking Mac mini M4 Pro (24GB/512GB) on apple …
+2026-06-10 16:43:19,761 [WARNING]   No price returned for Mac mini M4 Pro (24GB/512GB)
+2026-06-10 16:43:19,761 [INFO] Checking Mac mini M4 (8GB/256GB) — Amazon on amazon …
+2026-06-10 16:43:19,833 [WARNING] Amazon returned 403 for Mac mini M4 (8GB/256GB) — Amazon
+2026-06-10 16:43:19,834 [WARNING]   No price returned for Mac mini M4 (8GB/256GB) — Amazon
+2026-06-10 16:43:19,834 [INFO] Checking Mac mini M4 Pro (24GB/512GB) — Amazon on amazon …
+2026-06-10 16:43:19,899 [WARNING] Amazon returned 403 for Mac mini M4 Pro (24GB/512GB) — Amazon
+2026-06-10 16:43:19,900 [WARNING]   No price returned for Mac mini M4 Pro (24GB/512GB) — Amazon
+2026-06-10 16:43:19,901 [INFO] History saved to /home/user/test/price_history.json
+2026-06-10 16:43:19,901 [INFO] --- Current prices ---
+2026-06-10 16:43:19,901 [INFO] Monitoring continues for 20 more day(s) (until 2026-06-30).

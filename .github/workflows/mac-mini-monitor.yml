@@ -1,0 +1,99 @@
+name: Mac Mini Price Monitor
+
+on:
+  schedule:
+    # Every 4 hours at minute 0 (UTC): 00:00, 04:00, 08:00, 12:00, 16:00, 20:00
+    - cron: '0 */4 * * *'
+  workflow_dispatch:
+    inputs:
+      force_run:
+        description: 'Force a price check even past end date'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write   # needed to commit price_history.json back
+  issues: write     # needed to open price-drop alerts
+
+jobs:
+  check-prices:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      # -----------------------------------------------------------------------
+      # 1. Gate: stop running after June 30 2026 (unless forced)
+      # -----------------------------------------------------------------------
+      - name: Check monitoring window
+        id: gate
+        run: |
+          TODAY=$(date -u +%Y-%m-%d)
+          END_DATE="2026-06-30"
+          if [[ "$TODAY" > "$END_DATE" && "${{ inputs.force_run }}" != "true" ]]; then
+            echo "Monitoring period ended ($TODAY > $END_DATE). Skipping."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # -----------------------------------------------------------------------
+      # 2. Checkout the monitoring branch
+      # -----------------------------------------------------------------------
+      - uses: actions/checkout@v4
+        if: steps.gate.outputs.skip != 'true'
+        with:
+          ref: claude/mac-mini-price-monitor-c0vtc3
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # -----------------------------------------------------------------------
+      # 3. Python setup
+      # -----------------------------------------------------------------------
+      - uses: actions/setup-python@v5
+        if: steps.gate.outputs.skip != 'true'
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install dependencies
+        if: steps.gate.outputs.skip != 'true'
+        run: pip install -r requirements.txt
+
+      # -----------------------------------------------------------------------
+      # 4. Run the price monitor
+      # -----------------------------------------------------------------------
+      - name: Run price monitor
+        if: steps.gate.outputs.skip != 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          NOTIFY_EMAIL: vyas0189@gmail.com
+        run: python mac_mini_monitor.py
+
+      # -----------------------------------------------------------------------
+      # 5. Commit updated price history back to the branch
+      # -----------------------------------------------------------------------
+      - name: Commit price history
+        if: steps.gate.outputs.skip != 'true'
+        run: |
+          git config user.name  "mac-mini-price-bot"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add price_history.json price_monitor.log
+          if git diff --staged --quiet; then
+            echo "No price changes to commit."
+          else
+            git commit -m "chore: Mac mini price snapshot $(date -u +%Y-%m-%dT%H:%M)Z [skip ci]"
+            git push origin claude/mac-mini-price-monitor-c0vtc3
+          fi
+
+      # -----------------------------------------------------------------------
+      # 6. Upload logs as artifact (keeps last 30 days)
+      # -----------------------------------------------------------------------
+      - name: Upload run logs
+        if: steps.gate.outputs.skip != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: price-monitor-logs-${{ github.run_number }}
+          path: |
+            price_history.json
+            price_monitor.log
+          retention-days: 30
