@@ -127,7 +127,15 @@ def fetch_apple_price(product: dict, scraper) -> dict | None:
         if result:
             return result
 
-    # Strategy 3: overview page
+    # Strategy 3: Mac mini compare page (table layout, often simpler HTML with all configs)
+    compare_url = "https://www.apple.com/mac-mini/compare/"
+    html = _apple_fetch_cached(compare_url, scraper)
+    if html:
+        result = _best_price_match(_collect_all_apple_prices(html, compare_url), product["sku"], expected)
+        if result:
+            return result
+
+    # Strategy 4: overview page
     overview_url = "https://www.apple.com/mac-mini/"
     html = _apple_fetch_cached(overview_url, scraper)
     if html:
@@ -151,10 +159,51 @@ def _apple_fetch_cached(url: str, scraper) -> str | None:
     return _apple_page_cache.get(url)
 
 
+def _walk_json_for_prices(obj, found: list, source_url: str, depth: int = 0) -> None:
+    """Recursively walk any JSON structure collecting {partNumber, price/amount} pairs."""
+    if depth > 15 or not obj:
+        return
+    if isinstance(obj, dict):
+        part = obj.get("partNumber") or obj.get("sku") or obj.get("part_number") or ""
+        # Look for price nearby: {"amount": 599}, {"currentPrice": 599}, {"price": 599}
+        price = (
+            (obj.get("currentPrice") or {}).get("amount")
+            or (obj.get("price") or {}).get("currentPrice", {}).get("amount") if isinstance(obj.get("price"), dict) else None
+            or obj.get("amount")
+            or (obj.get("price") if isinstance(obj.get("price"), (int, float, str)) else None)
+        )
+        if part and price:
+            try:
+                found.append({
+                    "price": float(str(price).replace(",", "").replace("$", "")),
+                    "currency": "USD",
+                    "sku": str(part).replace("/", "").upper(),
+                    "source": "apple_next_data",
+                    "url": source_url,
+                })
+            except ValueError:
+                pass
+        for v in obj.values():
+            _walk_json_for_prices(v, found, source_url, depth + 1)
+    elif isinstance(obj, list):
+        for item in obj:
+            _walk_json_for_prices(item, found, source_url, depth + 1)
+
+
 def _collect_all_apple_prices(html: str, source_url: str) -> list[dict]:
     """Extract every distinct price from an Apple page, each tagged with its SKU."""
     found = []
     soup = BeautifulSoup(html, "lxml")
+
+    # __NEXT_DATA__ — Next.js SSR JSON contains full product catalogue for the page
+    next_data_tag = soup.find("script", id="__NEXT_DATA__")
+    if next_data_tag:
+        try:
+            nd = json.loads(next_data_tag.string or "")
+            _walk_json_for_prices(nd, found, source_url)
+            log.info("__NEXT_DATA__ yielded %d price candidates from %s", len(found), source_url)
+        except (json.JSONDecodeError, TypeError):
+            pass
 
     # JSON-LD — walk every item and every offer in that item
     for script in soup.find_all("script", type="application/ld+json"):
