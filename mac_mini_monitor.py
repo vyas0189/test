@@ -102,6 +102,12 @@ _playwright_ran: bool = False
 _catalog_api_prices: list[dict] = []
 _catalog_api_ran: bool = False
 
+# Third-party retailer results — cached after first call
+_bestbuy_prices: list[dict] = []
+_bestbuy_ran: bool = False
+_bhphoto_prices: list[dict] = []
+_bhphoto_ran: bool = False
+
 
 def _try_apple_catalog_api(scraper) -> list[dict]:
     """Call Apple's undocumented store catalog/search APIs that return JSON product data."""
@@ -285,6 +291,71 @@ def _init_playwright_apple() -> None:
         log.warning("Playwright initialisation failed: %s", e)
 
 
+def _try_bestbuy_prices(scraper) -> list[dict]:
+    """Search Best Buy for Mac mini M4 and extract prices — runs once per session."""
+    url = "https://www.bestbuy.com/site/searchpage.jsp?st=mac+mini+m4"
+    try:
+        resp = scraper.get(url, timeout=20)
+        log.info("Best Buy %s → HTTP %d (%d bytes)", url, resp.status_code, len(resp.text))
+        if resp.status_code != 200:
+            return []
+        soup = BeautifulSoup(resp.text, "lxml")
+        found: list[dict] = []
+        for nd in soup.find_all("script", id="__NEXT_DATA__"):
+            try:
+                _walk_json_for_prices(json.loads(nd.string or ""), found, url)
+            except (json.JSONDecodeError, TypeError):
+                pass
+        for ld in soup.find_all("script", type="application/ld+json"):
+            try:
+                _walk_json_for_prices(json.loads(ld.string or ""), found, url)
+            except (json.JSONDecodeError, TypeError):
+                pass
+        result = [f for f in found if 400 < f["price"] < 2000]
+        if result:
+            log.info("Best Buy: %d prices — %s", len(result),
+                     [(f["price"], f.get("sku") or "?") for f in result[:8]])
+        else:
+            log.info("Best Buy: no prices found in JSON structures")
+        return result
+    except Exception as e:
+        log.warning("Best Buy error: %s", e)
+        return []
+
+
+def _try_bhphoto_prices(scraper) -> list[dict]:
+    """Search B&H Photo for each Mac mini SKU and extract prices — runs once per session."""
+    found: list[dict] = []
+    for sku_q in ["MYLT3LLA", "MYLY3LLA", "MYM13LLA"]:
+        url = f"https://www.bhphotovideo.com/c/search?q={sku_q}&sto=1&ci=1003"
+        try:
+            resp = scraper.get(url, timeout=20)
+            log.info("B&H Photo %s → HTTP %d (%d bytes)", url, resp.status_code, len(resp.text))
+            if resp.status_code != 200:
+                continue
+            soup = BeautifulSoup(resp.text, "lxml")
+            page_found: list[dict] = []
+            for nd in soup.find_all("script", id="__NEXT_DATA__"):
+                try:
+                    _walk_json_for_prices(json.loads(nd.string or ""), page_found, url)
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            for ld in soup.find_all("script", type="application/ld+json"):
+                try:
+                    _walk_json_for_prices(json.loads(ld.string or ""), page_found, url)
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            in_range = [f for f in page_found if 400 < f["price"] < 2000]
+            if in_range:
+                log.info("B&H %s → %s", sku_q, [(f["price"], f.get("sku") or "?") for f in in_range[:5]])
+                found.extend(in_range)
+            else:
+                log.info("B&H %s → no prices in JSON", sku_q)
+        except Exception as e:
+            log.warning("B&H Photo error (%s): %s", sku_q, e)
+    return found
+
+
 def fetch_apple_price(product: dict, scraper) -> dict | None:
     """
     Per-product price lookup — four strategies in priority order:
@@ -351,6 +422,26 @@ def fetch_apple_price(product: dict, scraper) -> dict | None:
         result = _best_price_match(_collect_all_apple_prices(html, overview_url), product["sku"], expected)
         if result:
             return result
+
+    # Strategy 5: Best Buy search (authorized Apple reseller at MSRP)
+    global _bestbuy_ran, _bestbuy_prices
+    if not _bestbuy_ran:
+        _bestbuy_ran = True
+        _bestbuy_prices = _try_bestbuy_prices(scraper)
+    if _bestbuy_prices:
+        result = _best_price_match(_bestbuy_prices, product["sku"], expected)
+        if result:
+            return {**result, "source": "bestbuy"}
+
+    # Strategy 6: B&H Photo search (authorized Apple reseller at MSRP)
+    global _bhphoto_ran, _bhphoto_prices
+    if not _bhphoto_ran:
+        _bhphoto_ran = True
+        _bhphoto_prices = _try_bhphoto_prices(scraper)
+    if _bhphoto_prices:
+        result = _best_price_match(_bhphoto_prices, product["sku"], expected)
+        if result:
+            return {**result, "source": "bhphoto"}
 
     log.warning("All Apple strategies exhausted for %s", product["name"])
     return None
@@ -540,6 +631,22 @@ def _collect_all_apple_prices(html: str, source_url: str) -> list[dict]:
                 })
             except ValueError:
                 pass
+
+    # Broad sweep: catch any $NNN or $N,NNN price literal in the HTML text
+    # (covers aria-labels, hidden spans, and other non-standard elements)
+    for m in re.finditer(r'\$(\d{1,2},\d{3}|\d{3,4})(?:\.\d{2})?\b', soup.get_text(" ")):
+        try:
+            p = float(m.group(1).replace(",", ""))
+            if 400 < p < 5000:
+                found.append({
+                    "price": p,
+                    "currency": "USD",
+                    "sku": "",
+                    "source": "apple_text_sweep",
+                    "url": source_url,
+                })
+        except ValueError:
+            pass
 
     deduped = {(e["price"], e["sku"]): e for e in found if 400 < e["price"] < 5000}
     result = list(deduped.values())
