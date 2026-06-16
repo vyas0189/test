@@ -1973,3 +1973,58 @@
 2026-06-16 19:40:50,051 [INFO]   Mac mini M4 16GB/256GB                        $799.00    (2026-06-16T19:40:47Z)
 2026-06-16 19:40:50,051 [INFO]   Mac mini M4 Pro 24GB/512GB                    $1299.00   (2026-06-16T19:40:49Z)
 2026-06-16 19:40:50,051 [INFO] Monitoring active for 14 more day(s) (ends 2026-06-30).
+2026-06-16 22:16:45,184 [INFO] === Mac mini price check — 2026-06-16 ===
+2026-06-16 22:16:45,204 [INFO] Checking Mac mini M4 8GB/256GB …
+2026-06-16 22:16:45,612 [WARNING] Playwright initialisation failed: BrowserType.launch: Executable doesn't exist at /home/runner/.cache/ms-playwright/chromium_headless_shell-1223/chrome-headless-shell-linux64/chrome-headless-shell
+╔════════════════════════════════════════════════════════════╗
+║ Looks like Playwright was just installed or updated.       ║
+║ Please run the following command to download new browsers: ║
+║                                                            ║
+║     playwright install                                     ║
+║                                                            ║
+║ <3 Playwright Team                                         ║
+╚════════════════════════════════════════════════════════════╝
+2026-06-16 22:16:45,945 [INFO] Apple catalog API https://www.apple.com/shop/catalog/search?q=mac%20mini&pg=1&si=1&sb=bestsellers&so=descending&os=productselect → HTTP 404
+2026-06-16 22:16:46,182 [INFO] Apple catalog API https://www.apple.com/us-hed/shop/catalog/product/MYLT3LLA → HTTP 404
+2026-06-16 22:16:46,330 [INFO] Apple catalog API https://www.apple.com/us-hed/shop/catalog/product/MYLY3LLA → HTTP 404
+2026-06-16 22:16:46,432 [INFO] Apple catalog API https://www.apple.com/us-hed/shop/catalog/product/MYM13LLA → HTTP 404
+2026-06-16 22:16:46,608 [INFO] Apple https://www.apple.com/shop/product/MYLT3LLA -> HTTP 404 (152934 bytes)
+2026-06-16 22:16:46,722 [INFO] Apple https://www.apple.com/shop/product/MYLT3LL%2FA -> HTTP 400 (423 bytes)
+2026-06-16 22:16:46,968 [INFO] Apple https://www.apple.com/shop/go/product/MYLT3LLA -> HTTP 404 (152934 bytes)
+2026-06-16 22:16:47,037 [INFO] Apple https://www.apple.com/shop/buy-mac/mac-mini -> HTTP 200 (537075 bytes)
+2026-06-16 22:16:47,086 [INFO]   parse mac-mini → $799[?](ld_json)
+2026-06-16 22:16:47,103 [INFO] Apple https://www.apple.com/mac-mini/compare/ -> HTTP 200 (1063739 bytes)
+2026-06-16 22:16:47,894 [INFO]   parse https://www.apple.com/mac-mini/compare/ → (no prices found)
+2026-06-16 22:16:48,160 [INFO] Apple https://www.apple.com/mac-mini/ -> HTTP 200 (467535 bytes)
+2026-06-16 22:16:48,339 [INFO]   parse https://www.apple.com/mac-mini/ → (no prices found)
+2026-06-16 22:16:49,240 [INFO] Amazon search [apple mac mini m4 8gb 256gb] → HTTP 200 (1138386 bytes)
+2026-06-16 22:16:49,392 [INFO] Amazon search [apple mac mini m4 8gb 256gb] → 16 prices
+2026-06-16 22:16:50,267 [INFO] Amazon search [apple mac mini m4 pro 24gb 512gb] → HTTP 200 (1072120 bytes)
+2026-06-16 22:16:50,410 [INFO] Amazon search [apple mac mini m4 pro 24gb 512gb] → 16 prices
+2026-06-16 22:16:50,410 [INFO]   $649.00  (source: amazon_search)
+2026-06-16 22:16:50,410 [INFO] Checking Mac mini M4 16GB/256GB …
+2026-06-16 22:16:50,478 [INFO] Apple https://www.apple.com/shop/product/MYLY3LLA -> HTTP 404 (152936 bytes)
+2026-06-16 22:16:50,524 [INFO] Apple https://www.apple.com/shop/product/MYLY3LL%2FA -> HTTP 400 (423 bytes)
+2026-06-16 22:16:50,703 [INFO] Apple https://www.apple.com/shop/go/product/MYLY3LLA -> HTTP 404 (152936 bytes)
+2026-06-16 22:16:50,748 [INFO]   parse mac-mini → $799[?](ld_json)
+2026-06-16 22:16:50,748 [INFO]   $799.00  (source: apple_ld_json)
+2026-06-16 22:16:50,748 [INFO] Checking Mac mini M4 Pro 24GB/512GB …
+2026-06-16 22:16:50,818 [INFO] Apple https://www.apple.com/shop/product/MYM13LLA -> HTTP 404 (152936 bytes)
+2026-06-16 22:16:50,936 [INFO] Apple https://www.apple.com/shop/product/MYM13LL%2FA -> HTTP 400 (423 bytes)
+2026-06-16 22:16:51,081 [INFO] Apple https://www.apple.com/shop/go/product/MYM13LLA -> HTTP 404 (152934 bytes)
+2026-06-16 22:16:51,126 [INFO]   parse mac-mini → $799[?](ld_json)
+2026-06-16 22:16:51,979 [INFO]   parse https://www.apple.com/mac-mini/compare/ → (no prices found)
+2026-06-16 22:16:52,112 [INFO]   parse https://www.apple.com/mac-mini/ → (no prices found)
+2026-06-16 22:16:52,112 [INFO]   $1299.00  (source: amazon_search)
+2026-06-16 22:16:52,112 [INFO] Checking Mac mini M4 8GB/256GB (Amazon) …
+2026-06-16 22:16:52,238 [WARNING] Amazon returned 404 for Mac mini M4 8GB/256GB (Amazon)
+2026-06-16 22:16:52,239 [WARNING]   No price obtained for Mac mini M4 8GB/256GB (Amazon)
+2026-06-16 22:16:52,239 [INFO] Checking Mac mini M4 Pro 24GB/512GB (Amazon) …
+2026-06-16 22:16:52,356 [WARNING] Amazon returned 404 for Mac mini M4 Pro 24GB/512GB (Amazon)
+2026-06-16 22:16:52,357 [WARNING]   No price obtained for Mac mini M4 Pro 24GB/512GB (Amazon)
+2026-06-16 22:16:52,357 [INFO] Price history saved to /home/runner/work/test/test/price_history.json
+2026-06-16 22:16:52,357 [INFO] --- Latest prices ---
+2026-06-16 22:16:52,357 [INFO]   Mac mini M4 8GB/256GB                         $649.00    (2026-06-16T22:16:50Z)
+2026-06-16 22:16:52,357 [INFO]   Mac mini M4 16GB/256GB                        $799.00    (2026-06-16T22:16:50Z)
+2026-06-16 22:16:52,357 [INFO]   Mac mini M4 Pro 24GB/512GB                    $1299.00   (2026-06-16T22:16:52Z)
+2026-06-16 22:16:52,357 [INFO] Monitoring active for 14 more day(s) (ends 2026-06-30).
