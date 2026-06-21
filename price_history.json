@@ -554,6 +554,13 @@
       "currency": "USD",
       "source": "apple_ld_json",
       "url": "https://www.apple.com/shop/buy-mac/mac-mini"
+    },
+    {
+      "timestamp": "2026-06-21T17:43:16Z",
+      "price": 799.0,
+      "currency": "USD",
+      "source": "apple_ld_json",
+      "url": "https://www.apple.com/shop/buy-mac/mac-mini"
     }
   ],
   "Mac mini M4 Pro 24GB/512GB": [
